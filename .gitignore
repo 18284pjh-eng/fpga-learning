@@ -1,0 +1,44 @@
+# Quartus II 编译产物与临时文件
+db/
+incremental_db/
+output_files/
+greybox_tmp/
+*.qws
+*.bak
+*.rpt
+*.smsg
+*.summary
+*.done
+*.jdi
+*.pin
+*.qsf.bak
+*.sof
+*.pof
+*.jic
+*.sip
+*.sld
+*.cdf
+*.ddb
+*.hdb
+*.qarlog
+*.ppf
+*.sci
+*.cmp
+*.txt
+!doc/**/*.txt
+
+# ModelSim / 仿真产物
+sim_work/
+work/
+*.wlf
+*.mti
+modelsim.ini
+transcript
+vsim.wlf
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+debug.log

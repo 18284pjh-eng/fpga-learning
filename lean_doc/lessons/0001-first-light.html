@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 1 课 · 点亮你的第一盏 LED</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<h1>第 1 课 · 点亮你的第一盏 LED</h1>
+<p class="meta">
+  对应教材：<a href="#ref">《FPGA Verilog 开发实战指南》第 9 章「点亮你的 LED 灯」</a> ·
+  平台：野火征途 Pro（EP4CE10F17C8N） ·
+  预计 60–90 分钟 ·
+  上一篇：<em>（这是第一课）</em>
+</p>
+
+<blockquote>
+  <p><strong>本课的胜利：</strong>不抄代码，独立完成一次「写 RTL → 约束引脚 → 编译 → 下载 → 上板」的完整闭环，
+  让按下 KEY1 时 LED 点亮。这 5 步是之后 <em>每一课</em> 都要重复的骨架，第一次走通比理解所有细节更重要。</p>
+</blockquote>
+
+<h2>一、先换个脑子：你在描述电路，不是在写程序</h2>
+
+<p>你写过 2 年固件，这是优势也是陷阱。野火在书的前言里点名批评的一种失败模式就是
+<strong>「直直白白 C 思想的嫁接搬移」</strong>。先用 30 秒对照表校准一下：</p>
+
+<div class="vs">
+  <div class="cell">
+    <h4>MCU 思维（你的默认模式）</h4>
+    <p>代码是<em>指令序列</em>，CPU 一条条执行。<code>led = key;</code> 是某个时刻执行的一次动作，跑在 main 循环里。</p>
+  </div>
+  <div class="cell">
+    <h4>FPGA 思维（本课要建立的）</h4>
+    <p>代码是<em>电路图纸</em>。<code>assign led_out = key_in;</code> 描述的是一根<em>永远存在的导线</em>——没有"执行"，上电即生效，所有语句<em>并行</em>同时工作。</p>
+  </div>
+</div>
+
+<p>本课的电路简单到只有一根"导线"，但它有真实的物理约束（这些是书中 9.3 节查原理图得到的）：</p>
+
+<table>
+  <tr><th>信号</th><th>引脚</th><th>电气事实</th></tr>
+  <tr><td><code>key_in</code>（KEY1）</td><td>PIN_M2</td><td>按下时为 <strong>低电平（0）</strong>，松开为高（板上有上拉）</td></tr>
+  <tr><td><code>led_out</code>（LED）</td><td>PIN_L7</td><td><strong>低电平点亮</strong>（LED 阳极接电源，FPGA 引脚吸电流）</td></tr>
+</table>
+
+<p>所以 <code>assign led_out = key_in;</code> 的效果是：按下（key=0）→ led=0 → 灯亮。两个"低电平"正好抵消，一根直连导线即可。
+这属于<strong>组合逻辑</strong>：输出只取决于当前输入，没有时钟参与。</p>
+
+<div class="teacher">
+  <p><strong>老师提示：</strong>先打开征途 Pro 原理图（<code>1-开发板原理图_封装库_尺寸图_硬件手册/EBF EP4CE10 Pro/征途_PRO_EBF410202v1_SCH_20230915_原理图.pdf</code>），
+  自己找到 KEY1 和 LED 的电路，确认上面两个极性。会查原理图是固件工程师的旧技能，在 FPGA 世界同样保命。</p>
+</div>
+
+<h2>二、实战五步（边做边勾）</h2>
+
+<p>练习场是你已经建好的 <code>/home/pjh/project/fpga_learning/test/01_led/sp1_prj/</code>（目前是空工程）。
+官方答案在 <code>2-野火开源图书合集（源代码以及文档）/征途Pro/01_led/</code>——<strong>先自己写，卡住了再看</strong>。</p>
+
+<ol class="steps">
+  <li><strong>先回忆，再动手写 <code>rtl/led.v</code>。</strong>
+    在 <code>test/01_led/rtl/</code> 下新建 <code>led.v</code>，凭记忆写出模块：一个输入 <code>key_in</code>，一个输出 <code>led_out</code>，
+    一句 assign 连起来。写完再和官方 <code>rtl/led.v</code> 对照。注意野火的代码风格：文件头注释块、信号对齐、中文行注释。</li>
+  <li><strong>把源文件加入工程。</strong>
+    打开 Quartus → Project Navigator → Files，或直接在 <code>led.qsf</code> 里加
+    <code>set_global_assignment -name VERILOG_FILE ../rtl/led.v</code>。
+    设置顶层实体为 <code>led</code>（官方写法：<code>TOP_LEVEL_ENTITY led</code>）。</li>
+  <li><strong>分配引脚。</strong>
+    菜单 Assignments → Pin Planner：把 <code>key_in</code> 定到 <code>PIN_M2</code>，<code>led_out</code> 定到 <code>PIN_L7</code>。
+    顺便确认器件是 <code>EP4CE10F17C8</code>。这步在 MCU 里不存在——FPGA 的引脚是<em>你</em>说了算，约束就是图纸上的"接线端子编号"。</li>
+  <li><strong>全编译。</strong>
+    Processing → Start Compilation（Ctrl+L）。观察 Task 窗口的流水线：
+    Analysis &amp; Synthesis（把 Verilog 综合成门级网表）→ Fitter（把电路塞进芯片的具体单元并布线）→
+    Assembler（生成 <code>led.sof</code>）→ Timing Analysis。编译零错误后再继续。</li>
+  <li><strong>下载与上板验证。</strong>
+    Tools → Programmer，模式选 <strong>JTAG</strong>，选 <code>led.sof</code>，Start。
+    按下 KEY1 → LED 点亮，松开 → 熄灭，即通关。</li>
+</ol>
+
+<blockquote>
+  <p><strong>为什么断电程序就没了？</strong><code>.sof</code> 通过 JTAG 直接写进 FPGA 芯片内部的 <strong>SRAM 配置单元</strong>，掉电即失。
+  所以板上有 16Mbit SPI Flash：正式产品用 AS 模式把 <code>.jic</code> 固化进去，上电时 FPGA 从 Flash 自举。这也是
+  「现场可编程」的含义——配置数据本身就是电路的一部分。</p>
+</blockquote>
+
+<h2>三、检索练习（合上资料答）</h2>
+
+<div class="quiz" data-answer="1">
+  <p class="q">1. <code>assign led_out = key_in;</code> 这句话综合出来的是什么？</p>
+  <button>一段在上电后执行一次的初始化语句</button>
+  <button>一根把 key_in 持续连到 led_out 的组合逻辑导线</button>
+  <button>一个在每个时钟上升沿更新输出的寄存器</button>
+  <div class="explain">assign 无时钟、无"执行"，描述的是永远存在的连接——输出随输入实时（纳秒级传播延迟）变化，属于组合逻辑。选"寄存器"的是 always 块里非阻塞赋值干的事。</div>
+</div>
+
+<div class="quiz" data-answer="2">
+  <p class="q">2. <code>.sof</code> 文件下载后 FPGA 断电，重新上电会发生什么？</p>
+  <button>程序保留，因为 sof 已写入配置 Flash</button>
+  <button>电路消失，因为 sof 只写进了片内 SRAM 单元</button>
+  <button>程序保留，因为 FPGA 内部有掉电保持的寄存器</button>
+  <div class="explain">JTAG + sof 是纯 SRAM 配置，掉电即失；要固化必须用 AS 模式烧 .jic 到板载 16Mbit SPI Flash。</div>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="q">3. 引脚约束（Pin Planner 里把 key_in 定到 PIN_M2）这一步，本质上是在做什么？</p>
+  <button>告诉工具图纸上的接线端子编号</button>
+  <button>告诉工具信号传输的最高工作频率</button>
+  <button>告诉工具代码里各信号的命名对应关系</button>
+  <div class="explain">FPGA 封装上的球（F17 = 256-pin FBGA）和外部焊盘的连接是硬件固定的，约束就是指定你的哪个端口接到哪个球。时序约束（频率）是另一套东西，后面课程会讲。</div>
+</div>
+
+<h2>四、通关后的两个思考题（下一课的开场）</h2>
+
+<ol>
+  <li>现在 LED 只有"亮/灭"两个状态。如果想让 LED <strong>每 0.5 秒闪烁一次</strong>，
+  固件里你会写 <code>delay</code> 循环——在 FPGA 里没有 CPU，你猜用什么电路来实现"等一段时间"？（提示：板载晶振 50MHz）</li>
+  <li>官方工程目录分 <code>rtl / sim / quartus_prj / doc</code> 四层，<code>sim/tb_led.v</code> 是干什么的？
+  为什么官方每个实验都带它？（这是下一课的主角：ModelSim 仿真）</li>
+</ol>
+
+<h2 id="ref">五、本课资源</h2>
+
+<ul>
+  <li><strong>主资源（必读）：</strong>《FPGA Verilog 开发实战指南（上）》第 9 章，PDF 在
+    <code>2-野火开源图书合集（源代码以及文档）/征途Pro/</code>。书里有每一步的截图级操作，卡住就翻它。</li>
+  <li>官方参考答案：<code>2-野火开源图书合集（源代码以及文档）/征途Pro/01_led/</code>
+    （注意：官方工程路径含中文，直接打开可能报错，参考其文件内容即可，工程要在你自己的 <code>test/01_led</code> 里做）。</li>
+  <li>引脚速查：<code>1-开发板原理图_封装库_尺寸图_硬件手册/征途引脚绑定映射表.xlsx</code>。</li>
+  <li><strong>社区（Wisdom）：</strong>遇到下载器识别不到、编译报错等环境问题，先搜
+    <a href="https://www.firebbs.cn">野火论坛 firebbs.cn</a>，99% 的坑有人踩过。</li>
+</ul>
+
+<div class="teacher">
+  <p><strong>随时问我：</strong>我是你的老师。编译报错、引脚分配找不到、对 assign/always 有任何疑问，
+  直接把报错信息贴给我。学完本课后告诉我结果，我们进入第 2 课（仿真 + 让 LED 闪起来）。</p>
+</div>
+
+<nav class="lesson-nav">
+  <a href="../index.html">← 课程总览</a>
+  <a href="0002-blink-and-simulate.html">下一篇：第 2 课 · 计数器闪烁与 ModelSim 仿真 →</a>
+</nav>
+
+<script>
+// 测验：点击即判分，同一按钮不允许重复刷分
+document.querySelectorAll('.quiz').forEach(function (quiz) {
+  var answer = parseInt(quiz.dataset.answer, 10);
+  var buttons = quiz.querySelectorAll('button');
+  var done = false;
+  buttons.forEach(function (btn, i) {
+    btn.addEventListener('click', function () {
+      if (done) return;
+      done = true;
+      btn.classList.add(i === answer ? 'correct' : 'wrong');
+      if (i !== answer) buttons[answer].classList.add('correct');
+      quiz.querySelector('.explain').classList.add('show');
+    });
+  });
+});
+</script>
+
+</body>
+</html>
