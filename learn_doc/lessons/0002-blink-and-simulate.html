@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 2 课 · 让 LED 闪起来：时钟、计数器与时序逻辑</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<h1>第 2 课 · 让 LED 闪起来：时钟、计数器与时序逻辑</h1>
+<p class="meta">
+  对应教材：<a href="#ref">《FPGA Verilog 开发实战指南》第 15 章「时序逻辑的开始——寄存器」、第 17 章「计数器」</a> ·
+  平台：野火征途 Pro ·
+  预计 90–120 分钟 ·
+  上一篇：<a href="0001-first-light.html">第 1 课 · 点亮你的第一盏 LED</a>
+</p>
+
+<blockquote>
+  <p><strong>本课的胜利：</strong>写出你的第一个<strong>时序逻辑</strong>模块——计数器，让 LED 以 1Hz（每 0.5 秒翻转一次）自动闪烁。
+  并用 ModelSim 仿真验证它，第一次"不上板"就能看到电路的行为。</p>
+</blockquote>
+
+<h2>〇、开场复习（先别翻资料，凭记忆答）</h2>
+
+<ol>
+  <li>上一课的 <code>assign led_out = key_in;</code> 综合出来是什么？你在板子上看到了什么现象？</li>
+  <li>上一课我们踩的最后一个坑：点 Start 就 Failed，报 <code>Can't access JTAG chain</code>，原因是什么？怎么修的？</li>
+  <li>想LED每0.5秒闪一次，FPGA里没有CPU和delay循环，靠什么"数时间"？（第 1 课思考题，现在揭晓答案）</li>
+</ol>
+
+<div class="teacher">
+  <p><strong>答案核对：</strong>1）一根组合逻辑导线，按下 KEY1 灯亮；2）Linux 下 USB 设备节点对普通用户无写权限，
+  加 udev 规则 <code>51-usb-blaster.rules</code> 后重新插拔解决——记住这个排障路径：<em>Messages 报错 → lsusb → jtagconfig → 权限</em>；
+  3）答案就是本课主角：<strong>数时钟脉冲</strong>。</p>
+</div>
+
+<h2>一、知识：时钟是 FPGA 的心跳</h2>
+
+<p>征途 Pro 板上有一颗 <strong>50MHz 晶振</strong>，它给 FPGA 一个每秒 5 千万次的方波信号 <code>sys_clk</code>，每个周期 <strong>20ns</strong>。
+第 1 课的组合逻辑没有时钟，输入变输出立刻变；而"等 0.5 秒"这件事，在硬件里的做法是：</p>
+
+<blockquote>
+  <p>做一个<strong>计数器</strong>（一堆触发器），每个时钟上升沿加 1。数到 25,000,000 个上升沿，就是 0.5 秒到了，把 LED 翻转一下，计数器清零。</p>
+</blockquote>
+
+<p>这就是<strong>时序逻辑</strong>：输出不只取决于当前输入，还取决于"数到了第几个时钟沿"（状态）。描述它的 Verilog 惯用形式：</p>
+
+<pre><code>always@(posedge sys_clk or negedge sys_rst_n)
+    if(sys_rst_n == 1'b0)      // 复位：低电平有效，异步清零
+        cnt &lt;= 25'b0;
+    else    if(cnt == CNT_MAX)
+        cnt &lt;= 25'b0;          // 数满清零
+    else
+        cnt &lt;= cnt + 1'b1;     // 每个时钟上升沿 +1</code></pre>
+
+<p>三个新面孔，各记住一句话：</p>
+<table>
+  <tr><th>新面孔</th><th>一句话解释</th></tr>
+  <tr><td><code>posedge sys_clk</code></td><td>时钟上升沿触发。这段电路是<strong>一组触发器（寄存器）</strong>，不是指令循环</td></tr>
+  <tr><td><code>&lt;=</code> 非阻塞赋值</td><td>时序逻辑专用，"大家同时一起更新"。细节第 16 章讲，先照抄养成习惯</td></tr>
+  <tr><td><code>negedge sys_rst_n</code></td><td>异步复位：复位键（PIN_M15，按下为低）一按，寄存器立刻清零，不等时钟</td></tr>
+</table>
+
+<p><strong>算位宽（固件工程师的老活）：</strong>0.5s ÷ 20ns = 25,000,000 个周期，需要数 0 ~ 24,999,999。
+2²⁴ ≈ 1677万 &lt; 2500万 ≤ 2²⁵ ≈ 3355万，所以计数器要 <strong>25 位</strong>：<code>reg [24:0] cnt;</code>。
+数到 24,999,999 就翻转（注意不是 25,000,000——0 也是被数的一个数，想想为什么，测验里有它）。</p>
+
+<div class="teacher">
+  <p><strong>老师提示：</strong>官方例程（<code>征途Pro/08_counter/rtl/counter.v</code>）给了两种写法：直接翻转 LED（方法1）和
+  先产生<strong>一个时钟周期的"数满标志"信号</strong>再用它翻转（方法2）。方法2 是更规范的设计习惯——
+  标志信号可以被多个逻辑复用。建议你按方法2 写，书上 17 章也是这么推导的。</p>
+</div>
+
+<h2>二、实战六步</h2>
+
+<p>新练习场：<code>test/case/02-led-blink/</code>（自己建，目录结构仿照 01-led：<code>src/</code> + <code>sim/</code> + <code>sp1_prj/</code>）。</p>
+
+<ol class="steps">
+  <li><strong>新建 Quartus 工程</strong>：File → New Project Wizard，目录选 <code>02-led-blink/sp1_prj/</code>，
+    工程名和顶层实体都叫 <code>led_blink</code>，器件 <code>EP4CE10F17C8</code>。一路 Next，最后 Finish。</li>
+  <li><strong>先回忆，再写 <code>src/led_blink.v</code></strong>：模块带一个 <code>parameter CNT_MAX = 25'd24_999_999</code>
+    （为什么用 parameter？仿真时要改小它，见第 6 步），端口 <code>sys_clk / sys_rst_n / led_out</code>。
+    写完对照官方 <code>08_counter/rtl/counter.v</code>（模块名改成你的即可）。</li>
+  <li><strong>加入工程 + 分配引脚</strong>：Files 标签右键 Add/Remove Files；Pin Planner：
+    <code>sys_clk → PIN_E1</code>、<code>sys_rst_n → PIN_M15</code>、<code>led_out → PIN_L7</code>。
+    顶层不是 led 了，确认 Top-Level Entity 是 <code>led_blink</code>。</li>
+  <li><strong>全编译</strong>（Ctrl+L）。编译后去 Flow Summary 看：Total registers 应该是 <strong>26</strong>（25 位计数器 + 1 位 LED 翻转寄存器）——
+    这就是你刚"画"出来的触发器数量。</li>
+  <li><strong>下载上板</strong>：Programmer（这次 Hardware 里应该能看到 USB-Blaster 了）→ Start。
+    现象：LED 每半秒翻转一次 = 1Hz 闪烁。试着改 <code>CNT_MAX</code> 为 <code>25'd124_999_999</code> 重编译，
+    观察闪烁变慢（5 秒一个来回）——体会"计数器值 = 时间"。</li>
+  <li><strong>仿真验证（重点新技能）</strong>：真实电路 0.5 秒才闪一下，仿真等不起——把 <code>CNT_MAX</code> 改小就行，
+    这正是 parameter 的好处。写 <code>sim/tb_led_blink.v</code>：
+<pre><code>`timescale 1ns/1ns
+module tb_led_blink();
+
+reg  sys_clk, sys_rst_n;
+wire led_out;
+
+// 把 0.5s 压缩成 250 个周期（5us），现象相同、仿真飞快
+led_blink #(.CNT_MAX(25'd249)) u_led_blink(
+    .sys_clk  (sys_clk  ),
+    .sys_rst_n(sys_rst_n),
+    .led_out  (led_out  )
+);
+
+initial sys_clk = 1'b1;
+always #10 sys_clk = ~sys_clk;   // 50MHz：半周期 10ns
+
+initial begin
+    sys_rst_n = 1'b0;
+    #30
+    sys_rst_n = 1'b1;            // 30ns 后释放复位
+    #20000
+    $stop;                       // 仿真 20us，足够看到多次翻转
+end
+
+endmodule</code></pre>
+    用 Quartus 自带的 ModelSim-Altera 仿真（书第 9/17 章有截图级步骤，或翻《ModelSim电子系统分析及仿真》）：
+    Assignments → Settings → EDA Tool Settings → Simulation，选 ModelSim-Altera、Format 为 Verilog，
+    在 Compile test bench 里指定这个 tb 文件。运行后在波形窗里量一量：<code>led_out</code> 每隔 5000ns 翻转一次，和手算一致。</li>
+</ol>
+
+<h2>三、检索练习（合上资料答）</h2>
+
+<div class="quiz" data-answer="1">
+  <p class="q">1. 计数器要数 0.5 秒，为什么数到 24_999_999 就翻转，而不是 25_000_000？</p>
+  <button>因为寄存器 25 位最大只能存到 24_999_999</button>
+  <button>因为 0 也是被数的一个数，数满 2500 万个数终点是 24_999_999</button>
+  <button>为了给 LED 翻转寄存器预留一个计数的余量</button>
+  <div class="explain">0~24,999,999 恰好 25,000,000 个值。这种"差一"错误是计数器设计的经典坑——数满标志在 cnt == CNT_MAX 时拉起，如果 CNT_MAX 写成 25_000_000，25 位寄存器根本数不到，LED 永远不闪。</div>
+</div>
+
+<div class="quiz" data-answer="2">
+  <p class="q">2. <code>always@(posedge sys_clk)</code> 里的语句，综合出来的电路是什么？</p>
+  <button>一个每当 sys_clk 为高电平时持续执行的运算块</button>
+  <button>一根随输入实时变化的组合逻辑导线</button>
+  <button>一组只在时钟上升沿更新状态、其余时间保持的触发器</button>
+  <div class="explain">这正是时序逻辑和组合逻辑的分水岭：寄存器只在时钟沿采样输入，其它时间保持原值。"clk 为高期间持续执行"是 C 思维的陷阱——硬件里没有"执行"，只有"采样与保持"。</div>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="q">3. 想在仿真里 20 微秒就看到闪烁效果，正确的做法是什么？</p>
+  <button>例化时把 CNT_MAX 参数改小，物理电路不变</button>
+  <button>把仿真时间标尺 timescale 改成 1ms/1ms 加速时间</button>
+  <button>把 sys_clk 的翻转周期 #10 改成 #1 提高时钟频率</button>
+  <div class="explain">parameter 是把模块做成"可配置电路"的关键：仿真用小值看行为，上板用真值看现象，RTL 源码一行不用改。改 timescale 只改打印单位、不改仿真耗时；改时钟频率则仿真出来的已经不是你的真实电路了。</div>
+</div>
+
+<h2>四、通关后的思考题（下一课开场）</h2>
+
+<ol>
+  <li>板上 KEY1 按一下，用示波器看引脚波形，按下瞬间其实会"哆嗦"好几次（金属触点弹跳）。
+  结合固件经验猜猜：这个抖动直接接到时钟域里会产生什么后果？FPGA 里可以怎么消除它？</li>
+  <li>本课你用了 <code>&lt;=</code>，第 1 课用的是 <code>=</code>。如果把本课的 <code>cnt &lt;= cnt + 1'b1;</code> 写成
+  <code>cnt = cnt + 1'b1;</code>，你觉得综合出的电路会有什么不同？（第 16 章：阻塞 vs 非阻塞）</li>
+</ol>
+
+<h2 id="ref">五、本课资源</h2>
+
+<ul>
+  <li><strong>主资源（必读）：</strong>《FPGA Verilog 开发实战指南（上）》第 15 章（寄存器/时序逻辑开始）、
+    第 17 章（计数器，含方法1/方法2 的波形推导）。PDF 在
+    <code>2-野火开源图书合集（源代码以及文档）/征途Pro/</code>。</li>
+  <li>延伸：第 18 章「分频器」——本课的计数翻转本质就是一种 1Hz 分频；第 16 章「阻塞与非阻塞」回答思考题 2。</li>
+  <li>官方参考答案：<code>征途Pro/08_counter/</code>（rtl / sim / quartus_prj）。</li>
+  <li>仿真工具书：《ModelSim电子系统分析及仿真》（<code>4-推荐参考资料/5-Modelsim仿真参考工具书/</code>）。</li>
+  <li><strong>社区：</strong>ModelSim 报 license 错、波形看不到信号等问题，先搜
+    <a href="https://www.firebbs.cn">野火论坛 firebbs.cn</a>。</li>
+</ul>
+
+<div class="teacher">
+  <p><strong>随时问我：</strong>波形不对、寄存器数量对不上、ModelSim 装不上，把报错或截图贴给我。
+  完成后告诉我现象（LED 闪了没、波形量的周期是多少），我会记录进学习档案并准备第 3 课（按键消抖——你的第一个"输入信号处理"电路）。</p>
+</div>
+
+<nav class="lesson-nav">
+  <a href="../index.html">← 课程总览</a>
+  <a href="0003-key-debounce.html">下一篇：第 3 课 · 按键消抖（规划中） →</a>
+</nav>
+
+<script>
+document.querySelectorAll('.quiz').forEach(function (quiz) {
+  var answer = parseInt(quiz.dataset.answer, 10);
+  var buttons = quiz.querySelectorAll('button');
+  var done = false;
+  buttons.forEach(function (btn, i) {
+    btn.addEventListener('click', function () {
+      if (done) return;
+      done = true;
+      btn.classList.add(i === answer ? 'correct' : 'wrong');
+      if (i !== answer) buttons[answer].classList.add('correct');
+      quiz.querySelector('.explain').classList.add('show');
+    });
+  });
+});
+</script>
+
+</body>
+</html>
