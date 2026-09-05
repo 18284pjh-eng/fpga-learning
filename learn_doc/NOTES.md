@@ -9,13 +9,13 @@
 
 ## 教学偏好（观察）
 
-- 用户中文交流，喜欢按官方资料路径学习（自己建了 test/01_led 工程动手）。
+- 用户中文交流，喜欢按官方资料路径学习（自己建了 test/case/01-led 工程动手）。
 - 已看过资料目录结构，属于"先看目录再动手"型。
 
 ## 已知状态
 
-- 2026-09-05：教学工作区建立。用户 test/01_led/sp1_prj 已建 Quartus 工程但无 RTL 源码。
-- test/01_led_old 里有官方例程拷贝（rtl + tb），说明用户看过官方结构（rtl/sim/quartus_prj 目录规范）。
+- 2026-09-05：教学工作区建立。用户 test/case/01-led/sp1_prj 已建 Quartus 工程但无 RTL 源码。
+- test/01-led-old 里有官方例程拷贝（rtl + tb），说明用户看过官方结构（rtl/sim/quartus_prj 目录规范）。
 - 关键引脚（来自官方 01_led 例程 qsf）：KEY1 → PIN_M2，LED → PIN_L7；LED 低电平点亮，按键按下为低电平。
 
 ## 待办 / 下一步

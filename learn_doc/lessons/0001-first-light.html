@@ -55,12 +55,12 @@
 
 <h2>二、实战五步（边做边勾）</h2>
 
-<p>练习场是你已经建好的 <code>/home/pjh/project/fpga_learning/test/01_led/sp1_prj/</code>（目前是空工程）。
+<p>练习场是你已经建好的 <code>/home/pjh/project/fpga_learning/test/case/01-led/sp1_prj/</code>（目前是空工程）。
 官方答案在 <code>2-野火开源图书合集（源代码以及文档）/征途Pro/01_led/</code>——<strong>先自己写，卡住了再看</strong>。</p>
 
 <ol class="steps">
   <li><strong>先回忆，再动手写 <code>rtl/led.v</code>。</strong>
-    在 <code>test/01_led/rtl/</code> 下新建 <code>led.v</code>，凭记忆写出模块：一个输入 <code>key_in</code>，一个输出 <code>led_out</code>，
+    在 <code>test/case/01-led/rtl/</code> 下新建 <code>led.v</code>，凭记忆写出模块：一个输入 <code>key_in</code>，一个输出 <code>led_out</code>，
     一句 assign 连起来。写完再和官方 <code>rtl/led.v</code> 对照。注意野火的代码风格：文件头注释块、信号对齐、中文行注释。</li>
   <li><strong>把源文件加入工程。</strong>
     打开 Quartus → Project Navigator → Files，或直接在 <code>led.qsf</code> 里加
@@ -125,7 +125,7 @@
   <li><strong>主资源（必读）：</strong>《FPGA Verilog 开发实战指南（上）》第 9 章，PDF 在
     <code>2-野火开源图书合集（源代码以及文档）/征途Pro/</code>。书里有每一步的截图级操作，卡住就翻它。</li>
   <li>官方参考答案：<code>2-野火开源图书合集（源代码以及文档）/征途Pro/01_led/</code>
-    （注意：官方工程路径含中文，直接打开可能报错，参考其文件内容即可，工程要在你自己的 <code>test/01_led</code> 里做）。</li>
+    （注意：官方工程路径含中文，直接打开可能报错，参考其文件内容即可，工程要在你自己的 <code>test/case/01-led</code> 里做）。</li>
   <li>引脚速查：<code>1-开发板原理图_封装库_尺寸图_硬件手册/征途引脚绑定映射表.xlsx</code>。</li>
   <li><strong>社区（Wisdom）：</strong>遇到下载器识别不到、编译报错等环境问题，先搜
     <a href="https://www.firebbs.cn">野火论坛 firebbs.cn</a>，99% 的坑有人踩过。</li>

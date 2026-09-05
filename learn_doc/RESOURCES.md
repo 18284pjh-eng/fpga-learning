@@ -39,5 +39,5 @@
 
 ## 环境备注
 
-- 用户工程：`test/01_led/`（自建练习工程，Quartus 13.0.1 32-bit，EP4CE10F17C8）。
+- 用户工程：`test/case/01-led/`（自建练习工程，Quartus 13.0.1 32-bit，EP4CE10F17C8）。
 - Quartus 13.0.1 为野火教程指定版本（Web Edition 免费，支持 Cyclone IV）。

@@ -5,7 +5,7 @@
 - 学习者：固件工程师，2 年经验，C/Python 熟练，Verilog/SV 仅了解语法。
 - 平台：野火征途 Pro（EP4CE10F17C8N），Quartus II 13.0.1 Web Edition。
 - 已完成：浏览了野火资料目录，建立了自己的第一个 Quartus 工程
-  `test/01_led/sp1_prj/`（空工程，无源码、无约束）。
+  `test/case/01-led/sp1_prj/`（空工程，无源码、无约束）。
 - 尚未完成：任何一次完整的 综合→布局布线→下载→上板验证 闭环。
 
 ## 关键判断（Zone of Proximal Development）
