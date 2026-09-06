@@ -42,3 +42,5 @@ vsim.wlf
 *.swp
 Thumbs.db
 debug.log
+*.vcd
+rtl_work/
