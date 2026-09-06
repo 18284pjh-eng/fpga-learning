@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 3 课 · 按键消抖：你的第一个信号处理电路</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<h1>第 3 课 · 按键消抖：你的第一个信号处理电路</h1>
+<p class="meta">
+  对应教材：<a href="#ref">《FPGA Verilog 开发实战指南》第 19 章「按键消抖模块的设计与验证」</a> ·
+  平台：野火征途 Pro ·
+  预计 120–150 分钟 ·
+  上一篇：<a href="0002-blink-and-simulate.html">第 2 课 · 让 LED 闪起来</a>
+</p>
+
+<blockquote>
+  <p><strong>本课的胜利（两块）：</strong>① 写出按键消抖电路并上板——按一下 KEY1，LED 稳定翻转一次，绝不误触发；
+  ② 把仿真流程从"手敲命令"升级为 <strong>Makefile 一键驱动</strong>（<code>make sim</code> 出波形、<code>make wave</code> 看波形），
+  这是你以后所有实验的基础设施。</p>
+</blockquote>
+
+<h2>〇、开场复习（凭记忆答）</h2>
+
+<ol>
+  <li>第 2 课计数器"数满"为什么是 24_999_999 而不是 25_000_000？这个坑的通用名字叫什么？</li>
+  <li><code>cnt_flag</code>（数满标志）比"数到 0 就翻转"的写法好在哪里？</li>
+  <li>你的 tb 里 <code>#(.CNT(25'd249))</code> 把 0.5 秒压成了多少纳秒的仿真时间？波形量出来是 5000ns 吗？</li>
+</ol>
+
+<h2>一、知识：机械按键的"哆嗦"</h2>
+
+<p>你已经知道答案的一半：金属触点闭合瞬间会弹跳，产生 <strong>5~10ms 的抖动</strong>——电平在 0/1 之间反复横跳，
+而不是漂亮的阶跃。固件里的你用 <code>delay(10ms)</code> 再读一次来消抖；FPGA 里没有 CPU 睡觉，但有<strong>数时钟</strong>：</p>
+
+<div class="vs">
+  <div class="cell">
+    <h4>固件消抖（你的旧知识）</h4>
+    <p>读到按键变化 → 睡 10ms → 再读一次确认。CPU 在"等"，期间什么都不能干（或靠定时器+状态标志）。</p>
+  </div>
+  <div class="cell">
+    <h4>FPGA 消抖（本课电路）</h4>
+    <p>只要 key_in 是低电平就一直数时钟；<strong>期间电平一变高（抖动）立刻清零重数</strong>。
+    能连续数满 20ms 还没被清零，说明这是真按下。电路在"看"，从不"等"。</p>
+  </div>
+</div>
+
+<p><strong>算术先行</strong>（第 2 课的老活，自己先算再看答案）：
+20ms ÷ 20ns = 1,000,000 个周期 → 数 0 ~ 999,999 → 需要 20 位（2²⁰ = 1,048,576 > 100 万）。</p>
+
+<p>官方设计（书第 19 章）的精妙处在<strong>输出形式</strong>：它不输出"电平"，而输出一个 <strong>只维持一个时钟周期（20ns）的脉冲</strong> <code>key_flag</code>——
+每次确认按下时闪一拍。为什么这么设计？因为"事件"（按下这件事发生了）和"电平"（现在还按着）是两种信息，
+下游电路用寄存器捕获这个脉冲，想要"按一下翻转一次"、"长按连发"都从这一个干净的脉冲出发。</p>
+
+<div class="teacher">
+  <p><strong>老师提示：</strong>20ns 的脉冲人眼永远看不见，所以上板验证时必须用寄存器"接住"它。
+  本课顶层输出两个信息：<code>key_flag</code>（引到 LED 不可见，但仿真可见）和 <code>led_out</code>（每捕获一个 flag 翻转一次）。</p>
+</div>
+
+<h2>二、实战 A：设计电路</h2>
+
+<p>练习场：<code>test/case/03-key-filter/</code>（结构同前：<code>src/</code> + <code>sim/</code> + <code>sp1_prj/</code>）。</p>
+
+<ol class="steps">
+  <li><strong>先画波形再写代码</strong>（野火方法论第 2 步）：在纸上画 key_in 抖动按下 → cnt 反复清零 → 稳定后数满 →
+  key_flag 一拍 → led 翻转。画不出来就翻书 19 章的波形图对照。</li>
+  <li><strong>写 <code>src/key_filter.v</code></strong>（先回忆再对照官方 <code>10_key_filter/rtl/key_filter.v</code>）。
+  在官方基础上加一个输出：<code>output reg led_out</code>，每当 <code>key_flag</code> 有效翻转一次。
+  记住第 2 课的教训：flag 只有一拍，<code>led_out</code> 必须是时序逻辑寄存器，绝不能 <code>assign led_out = key_flag;</code>。</li>
+  <li><strong>新建 Quartus 工程 + 约束</strong>：顶层 <code>key_filter</code>，器件 EP4CE10F17C8。
+    引脚：<code>sys_clk → PIN_E1</code>、<code>sys_rst_n → PIN_M15</code>、<code>key_in → PIN_M2</code>（KEY1）、
+    <code>led_out → PIN_L7</code>。全编译。</li>
+  <li><strong>上板验证</strong>：按一下 KEY1 → LED 翻转一次；松开 → 不变；按住不放 → 也只翻一次（想想为什么，思考题 1）。
+    快速连按，LED 次数跟手——这就是消抖成功的手感。</li>
+</ol>
+
+<h2>三、实战 B：仿真（ tb 要自己"制造"抖动）</h2>
+
+<p>第 2 课的 tb 只产生了规整的时钟和复位；本课 tb 的新课题是<strong>模拟一个机械按键的抖动波形</strong>。
+思路：用 SystemVerilog 的 <code>task</code> 封装"抖动着按下/松开"的动作（你写过的 C 函数思维，直接迁移）：</p>
+
+<pre><code>task automatic press_key();
+    int i;
+    // 抖动期：电平随机横跳 8 次，间隔 0~200ns
+    for (i = 0; i &lt; 8; i++) begin
+        key_in = $urandom_range(0, 1);
+        #(20 + $urandom_range(0, 180));
+    end
+    key_in = 1'b0;                 // 稳定按下
+    #(T_STABLE);                   // 稳定时间 &gt; 消抖时长，必出 flag
+    key_in = 1'b1;                 // 释放
+endtask</code></pre>
+
+<p>两个关键决策，写 tb 前先想清楚：</p>
+<ul>
+  <li><strong>时间压缩</strong>：真实 20ms 仿真太久。例化时 <code>#(.CNT_MAX(20'd99))</code>（100 个周期 = 2µs 消抖时长），
+    tb 里的稳定时间给 <code>3us</code>（&gt; 消抖时长）。物理 RTL 一行不改。</li>
+  <li><strong>验证什么</strong>：每次 <code>press_key</code> 后恰好出现<strong>一拍</strong> key_flag（不是两拍、不是零拍）；
+    抖动期绝不出现 flag。用 <code>$display</code> 打印 flag 出现的时刻，自己核对。</li>
+</ul>
+
+<h2>四、实战 C：Makefile —— 仿真流程工程化</h2>
+
+<p>你天天写 Makefile，这块让你自己来。需求清单（先自己写，卡住看答案）：</p>
+
+<ol>
+  <li>Makefile 放在 <code>sim/</code> 目录，工作目录（<code>work/</code> 库、VCD）也生成在 <code>sim/</code> 下——别再埋进 sp1_prj 深处。</li>
+  <li>目标 <code>sim</code>（默认目标）：vlib 建库 → vlog 编译 <code>../src/key_filter.v</code> 和 tb → vsim 控制台运行并导出 VCD。</li>
+  <li>目标 <code>wave</code>：用 gtkwave 打开 VCD。</li>
+  <li>目标 <code>clean</code>：删掉 work 库、VCD、transcript。</li>
+  <li>工具路径（<code>/tool/altera/13.0sp1/modelsim_ase/bin</code>）、顶层模块名、VCD 文件名全部用**变量**定义——
+    换个实验只改变量，Makefile 结构不动。这是你以后每课复用的模板。</li>
+  <li>三个目标都是伪目标（<code>.PHONY</code>），sim 里每步命令失败要能停住（想想 make 的每行错误传播规则，或者用 <code>set -e</code> 思维）。</li>
+</ol>
+
+<p><details><summary><strong>参考答案（先自己写完再展开）</strong></summary></p>
+<pre><code>MSBIN := /tool/altera/13.0sp1/modelsim_ase/bin
+VLIB  := $(MSBIN)/vlib
+VLOG  := $(MSBIN)/vlog
+VSIM  := $(MSBIN)/vsim
+
+TOP   := tb_key_filter
+VCD   := key_filter.vcd
+RTL   := ../src/key_filter.v
+TB    := ./tb_key_filter.sv
+
+.PHONY: sim wave clean
+
+sim: $(VCD)
+	@echo "== 仿真完成，波形: $(CURDIR)/$(VCD)  (make wave 查看)"
+
+$(VCD): $(RTL) $(TB)
+	$(VLIB) work
+	$(VLOG) -quiet $(RTL) $(TB)
+	$(VSIM) -c $(TOP) -do "vcd file $(VCD); vcd add -r sim:/$(TOP)/*; run -all; quit -f"
+
+wave: $(VCD)
+	gtkwave $(VCD)
+
+clean:
+	rm -rf work $(VCD) transcript vsim.wlf
+</code></pre>
+<p></details></p>
+
+<div class="teacher">
+  <p><strong>老师提示：</strong>注意参考答案把 VCD 声明为<strong>目标文件依赖 RTL/TB 源码</strong>——
+  源码没改时 <code>make sim</code> 不会重跑仿真（增量构建），这是 Makefile 送你的免费福利。
+  顺带一个坑：<code>vlib work</code> 对已存在的库会报错，参考答案依赖 <code>make clean</code> 或容忍该错误——
+  想做得更干净，可以在 shell 命令里先判断目录是否存在。</p>
+</div>
+
+<h2>五、检索练习（合上资料答）</h2>
+
+<div class="quiz" data-answer="2">
+  <p class="q">1. 消抖计数器"电平一变高就清零重数"，为什么这样就能消掉抖动？</p>
+  <button>抖动期间计数器无法连续数满20ms，虚假按下全部被清零</button>
+  <button>清零动作把抖动毛刺直接滤除，输出变成了干净的阶跃</button>
+  <button>计数器清零时把 key_in 同步成稳定值，毛刺不再传播</button>
+  <div class="explain">清零不能"滤除"毛刺（key_in 毛刺仍然一直存在），它的作用是让"数满"这个事件只在电平真正稳定 20ms 后发生一次——用时间换可信度，与固件里 delay 后再读一次是同一个思想。</div>
+</div>
+
+<div class="quiz" data-answer="1">
+  <p class="q">2. key_flag 只有一拍宽（20ns），为什么不能 assign led_out = key_flag 让 LED 闪烁指示？</p>
+  <button>脉冲信号电平不确定，直接连线会导致输出悬空</button>
+  <button>20ns 的亮灭人眼不可见，且电平输出丢失了"事件"语义</button>
+  <button>组合逻辑输出会与 key_flag 形成环路，产生竞争冒险</button>
+  <div class="explain">assign 只是复制信号，20ns 的脉冲 LED 每秒闪五千万次 = 恒亮/不可分辨。正确做法是让时钟沿捕获事件：flag 有效时翻转寄存器——"事件计数"必须靠时序逻辑。</div>
+</div>
+
+<div class="quiz" data-answer="0">
+  <p class="q">3. tb 里模拟真实按键抖动，下列哪个说法是对的？</p>
+  <button>用 task 生成随机抖动序列，并把 CNT_MAX 参数改小加速仿真</button>
+  <button>直接给 key_in 加理想阶跃，20ms 抖动太小可以忽略</button>
+  <button>把 sys_clk 时钟频率提高到 1GHz，让 20ms 的仿真变快</button>
+  <div class="explain">消抖电路的全部价值就在"抖动期间不出 flag"——不给抖动等于没测它。改时钟频率仿出来的不是你的电路；改 parameter 压缩时间才是不动 RTL 的正规做法。</div>
+</div>
+
+<h2>六、通关后的思考题（下一课开场）</h2>
+
+<ol>
+  <li>按住 KEY1 不放，key_flag 会出几次脉冲？（提示：看计数器数满后的行为——<code>cnt == CNT_MAX && key_in == 0</code> 时计数器在干什么）
+  要实现"长按 1 秒后 LED 连续快闪"或"区分长按/短按"，你觉得电路需要记住哪些"历史状态"？</li>
+  <li>消抖计数器数满后停在 CNT_MAX 不动（<code>cnt_20ms &lt;= cnt_20ms</code>），为什么不直接让它继续加 1 溢出翻转？（预习：这和"状态饱和"有关，也和下一课的状态机思想相连）</li>
+</ol>
+
+<h2 id="ref">七、本课资源</h2>
+
+<ul>
+  <li><strong>主资源（必读）：</strong>《FPGA Verilog 开发实战指南（上）》第 19 章「按键消抖模块的设计与验证」
+      （PDF 在 <code>2-野火开源图书合集（源代码以及文档）/征途Pro/</code>）。
+      本章完整演示了野火方法论：框图 → 波形图 → 代码 → 仿真 → 上板，值得逐节跟。</li>
+  <li>官方参考答案：<code>征途Pro/10_key_filter/</code>（rtl / sim / quartus_prj）。</li>
+  <li>GTkWave 操作：<a href="../reference/gtkwave-cheatsheet.html">速查卡</a>。</li>
+  <li> Makefile 语法问题随时问我；想深挖增量构建与依赖树，这是你的老本行，我们可以在课程外单独聊。</li>
+  <li><strong>社区：</strong>消抖时长取多少、方波抖动怎么建模，<a href="https://www.firebbs.cn">firebbs.cn</a> 有大量实测讨论。</li>
+</ul>
+
+<div class="teacher">
+  <p><strong>随时问我：</strong>tb 的 task 写法、Makefile 报错、上板误触发，直接贴报错/截图。
+  两块胜利（上板消抖 + make sim/wave 流程）都拿到后回我一声，进第 4 课——
+  你思考题里的答案将直接引出<strong>状态机 FSM</strong>（官方 14_fsm），那是 Verilog 设计方法论的真正分水岭。</p>
+</div>
+
+<nav class="lesson-nav">
+  <a href="../index.html">← 课程总览</a>
+  <a href="0004-fsm.html">下一篇：第 4 课 · 状态机 FSM（规划中） →</a>
+</nav>
+
+<script>
+document.querySelectorAll('.quiz').forEach(function (quiz) {
+  var answer = parseInt(quiz.dataset.answer, 10);
+  var buttons = quiz.querySelectorAll('button');
+  var done = false;
+  buttons.forEach(function (btn, i) {
+    btn.addEventListener('click', function () {
+      if (done) return;
+      done = true;
+      btn.classList.add(i === answer ? 'correct' : 'wrong');
+      if (i !== answer) buttons[answer].classList.add('correct');
+      quiz.querySelector('.explain').classList.add('show');
+    });
+  });
+});
+</script>
+
+</body>
+</html>

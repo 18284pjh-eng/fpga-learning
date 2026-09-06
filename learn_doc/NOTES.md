@@ -27,9 +27,13 @@
 
 ## 待办 / 下一步
 
-- 第 2 课已发布（0002-blink-and-simulate.html，对应书第 15/17 章，官方例程 08_counter）。
-  等用户回报：LED 是否 1Hz 闪烁、ModelSim 波形量到的翻转周期。
-- 第 3 课预设：按键消抖（官方 10_key_filter）——用户有固件背景，消抖思路可对比软件消抖/中断。
+- **第 2 课通关**（2026-09-06）：仿真验证 led 5000ns 翻转通过；ModelSim GUI 故障已用
+  `case/02-led-blink/sim/run_sim.sh`（控制台+VCD）绕过，LR-0003 归档。
+- **第 3 课已发布**（0003-key-debounce.html，书第 19 章，官方 10_key_filter）：
+  按键消抖 + **用户要求：从第 3 课起仿真一律走 Makefile**（make sim / make wave / make clean），
+  参考答案在课程 <details> 里，用户自己先写。
+- 第 4 课预设：状态机 FSM（书 14_fsm / 官方 14_fsm）——用"长按/短按区分"思考题引入。
+- tb 命名提醒：用户上节课把 tb 模块叫 top，本课要求规范命名 tb_key_filter。
 - 询问用户：MISSION.md 中长期方向是否符合预期（接口驱动？图像？以太网？）。
 
 ## 教学策略
