@@ -14,11 +14,15 @@ always@(posedge clk or negedge rst_n)
    if(rst_n == 0) begin
       cnt <= 0;
       cnt_flag <= 0;
+   end
    else if(cnt == CNT) begin
       cnt <= 0;
-      cnt_lfag <= 1;
+      cnt_flag <= 1;
    end
-   else cnt <= cnt + 'd1;
+   else begin
+      cnt <= cnt + 'd1;
+      cnt_flag <= 0;
+   end
 
 always@(posedge clk or negedge rst_n)
    if(rst_n == 0) led <= 0;
