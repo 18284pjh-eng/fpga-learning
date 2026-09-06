@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>参考卡 · GTKWave 常用操作</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<h1>GTKWave 常用操作速查卡</h1>
+<p class="meta">适用：本课程所有 VCD 波形（run_sim.sh 产物） · 2026-09-06</p>
+
+<h2>启动与布局</h2>
+<pre><code>gtkwave 文件.vcd                 # 直接打开
+gtkwave led.vcd 布局.gtkw        # 打开波形 + 恢复保存的视图布局</code></pre>
+<ul>
+  <li>左侧 <strong>SST 树</strong>：按设计层次浏览，双击信号加入右侧波形区（或选中后点 Append）。</li>
+  <li><strong>File → Write Save File</strong>（<code>.gtkw</code>）：把"加了哪些信号、缩放位置、标记"存成布局，
+      下次打开 VCD 后加载 <code>.gtkw</code> 一键复原。每课保存一份。</li>
+</ul>
+
+<h2>缩放与平移（最高频）</h2>
+<table>
+  <tr><th>操作</th><th>方式</th></tr>
+  <tr><td>放大</td><td><code>Ctrl+滚轮</code> 或 <code>Alt+滚轮向下</code>（以光标为中心）</td></tr>
+  <tr><td>缩小</td><td><code>Alt+滚轮向上</code></td></tr>
+  <tr><td><strong>Zoom Fit（全局适配）</strong></td><td>工具栏 <code>|&lt;-&gt;|</code> 按钮 —— 每次打开波形先按它</td></tr>
+  <tr><td>横向平移时间轴</td><td><code>Shift+滚轮</code>，或直接拖动顶部时间标尺</td></tr>
+  <tr><td>上下滚信号列表</td><td>普通滚轮（在信号列表区）</td></tr>
+  <tr><td>缩放锚点</td><td>View 菜单 → Center Zoom：让缩放围绕主游标而非屏幕中心</td></tr>
+</table>
+
+<h2>游标与时间测量（本课程的核心用法）</h2>
+<table>
+  <tr><th>操作</th><th>效果</th></tr>
+  <tr><td><strong>左键点波形</strong></td><td>放置主游标（绿色虚线），顶部时间栏同步显示</td></tr>
+  <tr><td><strong>中键点击</strong></td><td>放置基准游标；顶部状态栏显示 主游标−基准 的 <strong>delta 差值</strong></td></tr>
+  <tr><td>鼠标悬停</td><td>状态栏实时显示 光标位置 与 主游标 的差值</td></tr>
+  <tr><td><code>Shift+左键</code></td><td>放置命名游标 A、B、C…（Marker 菜单里管理、可跳转）</td></tr>
+</table>
+
+<div class="teacher">
+  <p><strong>量 5000ns 的标准动作：</strong>Zoom Fit → 左键点 led 第一个上升沿 → 鼠标悬停到下一个上升沿 →
+  读状态栏 delta ≈ 5000ns。或者：左键点第一沿、Shift+左键点第二沿，读两个命名游标的差。</p>
+</div>
+
+<h2>信号显示技巧</h2>
+<table>
+  <tr><th>需求</th><th>操作</th></tr>
+  <tr><td>改总线进制</td><td>选中信号右键 → Data Format → Hex / Decimal / Bin / ASCII</td></tr>
+  <tr><td>把计数器看成模拟曲线</td><td>右键 → Data Format → Analog（调 Height/Step）—— 看锯齿波计数器一目了然</td></tr>
+  <tr><td>数信号翻转次数</td><td>右键 → Show Change Count（验证"翻转了 4 次"直接读数）</td></tr>
+  <tr><td>隐藏/恢复信号</td><td>选中按 <code>Delete</code>（只是不显示，数据还在）；Edit → Unshow All 全部恢复</td></tr>
+  <tr><td>按值搜信号翻转</td><td>Search 菜单 → Pattern Search（如搜 led==1 的所有时刻）</td></tr>
+  <tr><td>展开内部信号</td><td>右侧选中实例（如 u_led_blink），中间栏出现其内部 cnt/cnt_flag，双击加入显示</td></tr>
+</table>
+
+<h2 id="ref">权威参考</h2>
+<ul>
+  <li>GTKWave 官方手册（PDF，键位/功能全集）：
+      <a href="https://gtkwave.sourceforge.net/gtkwave.pdf">gtkwave.sourceforge.net/gtkwave.pdf</a></li>
+  <li>Doulos 出的 GTKWave 一页纸速查（业界常用）：
+      <a href="https://www.doulos.com/headstart/systemc-gtkwave-cribsheet/">doulos.com/.../gtkwave-cribsheet</a></li>
+</ul>
+
+<nav class="lesson-nav">
+  <a href="../index.html">← 课程总览</a>
+  <a href="../lessons/0002-blink-and-simulate.html">← 回到第 2 课</a>
+</nav>
+
+</body>
+</html>

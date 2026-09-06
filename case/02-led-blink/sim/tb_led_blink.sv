@@ -1,7 +1,7 @@
 // import ../src/led_blink.v
 `timescale 1ns/1ns
 
-module top;
+module tb_led_blink;
 
 reg clk = 1'b1;
 reg rst_n;
