@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 4 课 · 状态机 FSM：让电路记住自己在哪一步</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<h1>第 4 课 · 状态机 FSM：让电路记住自己在哪一步</h1>
+<p class="meta">
+  对应教材：<a href="#ref">《FPGA Verilog 开发实战指南》第 14 章「状态机」</a> ·
+  平台：野火征途 Pro · 预计 120–180 分钟 ·
+  上一篇：<a href="0003-key-debounce.html">第 3 课 · 按键消抖</a>
+</p>
+
+<blockquote>
+  <p><strong>本课的胜利：</strong>把“按下后等待、再判断松开”的过程画成状态图，写成一个同步有限状态机；
+  仿真验证短按与长按路径，并上板实现：短按让 LED 翻转一次，长按让 LED 快速闪烁。</p>
+</blockquote>
+
+<h2>〇、开场复习（合上资料答）</h2>
+<ol>
+  <li>第 3 课的 <code>key_flag</code> 为什么只有一个时钟周期？下游怎样把它变成人眼可见的 LED 翻转？</li>
+  <li>消抖计数器数满后为什么停在最大值，而不是继续加到溢出？这对应哪一种“状态”？</li>
+  <li>按住 KEY1 不放，消抖模块应该只报告一次按下事件。要区分短按和长按，电路还需要记住什么？</li>
+</ol>
+
+<div class="teacher">
+  <p><strong>答案核对：</strong>事件脉冲由时序逻辑捕获；计数器停在最大值是饱和状态；本课要记住“当前处于等待、按住还是完成”的阶段，
+  以及按住了多久。把有限的阶段和转移条件写清楚，就是 FSM。</p>
+</div>
+
+<h2>一、先建立硬件思维：FSM 是带记忆的电路</h2>
+<p>组合逻辑只能回答“现在输入是什么”；寄存器能保存“上一个时钟沿之后的结果”。有限状态机把两者接在一起：</p>
+
+<div class="vs">
+  <div class="cell">
+    <h4>状态</h4>
+    <p>由寄存器保存，例如 <code>IDLE</code>、<code>PRESSED</code>、<code>LONG</code>。状态只在时钟沿改变。</p>
+  </div>
+  <div class="cell">
+    <h4>转移</h4>
+    <p>由当前状态和输入决定下一状态，例如在 <code>PRESSED</code> 中，计时未到就继续等待，计时到就进入 <code>LONG</code>。</p>
+  </div>
+</div>
+
+<p>本课使用的状态图如下。圆圈是状态，箭头上的文字是“输入条件 / 输出事件”。输出事件仍然用一个时钟周期的脉冲表达。</p>
+<table>
+  <tr><th>当前状态</th><th>条件</th><th>下一状态</th><th>事件</th></tr>
+  <tr><td><code>IDLE</code></td><td><code>key_in == 0</code></td><td><code>PRESSED</code></td><td>无</td></tr>
+  <tr><td><code>PRESSED</code></td><td>松开</td><td><code>IDLE</code></td><td><code>short_pulse</code></td></tr>
+  <tr><td><code>PRESSED</code></td><td>计时达到长按阈值</td><td><code>LONG</code></td><td><code>long_pulse</code></td></tr>
+  <tr><td><code>LONG</code></td><td>仍按住</td><td><code>LONG</code></td><td>周期性闪烁</td></tr>
+  <tr><td><code>LONG</code></td><td>松开</td><td><code>IDLE</code></td><td>无</td></tr>
+</table>
+
+<div class="teacher">
+  <p><strong>关键边界：</strong>状态机不是“软件线程”。所有状态寄存器仍由同一个 <code>sys_clk</code> 驱动；
+  状态转移只会在时钟上升沿发生。组合逻辑负责计算下一步，时序逻辑负责保存这一步。</p>
+</div>
+
+<h2>二、推荐的三段式 FSM</h2>
+<p>把职责拆开，波形和综合结果都更容易检查。先记住结构，再填入本课的业务条件：</p>
+<pre><code>// 1. 状态寄存器：只保存 current_state
+always @(posedge sys_clk or negedge sys_rst_n) begin
+    if (!sys_rst_n)
+        current_state &lt;= IDLE;
+    else
+        current_state &lt;= next_state;
+end
+
+// 2. 下一状态组合逻辑：只决定 next_state
+always @(*) begin
+    next_state = current_state;  // 默认自保持
+    case (current_state)
+        IDLE:    if (key_down) next_state = PRESSED;
+        PRESSED: if (released)  next_state = IDLE;
+                 else if (long_done) next_state = LONG;
+        LONG:    if (released)  next_state = IDLE;
+        default:              next_state = IDLE;
+    endcase
+end
+
+// 3. 输出时序逻辑：脉冲默认清零，只在事件发生时拉高一拍
+always @(posedge sys_clk or negedge sys_rst_n) begin
+    if (!sys_rst_n)
+        short_pulse &lt;= 1'b0;
+    else begin
+        short_pulse &lt;= 1'b0;
+        if (current_state == PRESSED &amp;&amp; released)
+            short_pulse &lt;= 1'b1;
+    end
+end</code></pre>
+
+<p><code>default</code> 分支是硬件安全网：如果寄存器因上电、干扰或仿真初始化进入非法编码，电路会回到已知状态。
+  <code>next_state = current_state</code> 则避免组合逻辑遗漏条件而推导出不想要的锁存器。</p>
+
+<h2>三、实战 A：短按/长按控制器</h2>
+<p>练习场：<code>test/case/04-key-fsm/</code>，目录沿用前三课的 <code>src/</code>、<code>sim/</code>、<code>sp1_prj/</code>。</p>
+<ol class="steps">
+  <li><strong>先画状态图和时序图。</strong>画出复位、稳定按下、长按阈值、松开四段；标出 <code>short_pulse</code> 与 <code>long_pulse</code> 只出现一拍的位置。</li>
+  <li><strong>写 <code>src/key_fsm.v</code>。</strong>输入为 <code>sys_clk</code>、<code>sys_rst_n</code>、第 3 课输出的干净 <code>key_flag</code> 或稳定按键电平；输出为 <code>led_out</code>。建议先只完成短按路径，再加长按。</li>
+  <li><strong>加入参数。</strong>用 <code>parameter LONG_CNT_MAX</code> 控制长按时长。真实板上可按 50MHz 计算，仿真例化时改成 <code>20'd99</code>，不要修改 RTL 中的物理时钟假设。</li>
+  <li><strong>连接输出。</strong>短按事件让 <code>led_out</code> 翻转一次；进入 <code>LONG</code> 后用一个小分频计数器让 LED 周期闪烁。LED 是寄存器，不要直接接一拍脉冲。</li>
+  <li><strong>用文本写工程约束。</strong>创建 <code>sp1_prj/key_fsm.qpf</code> 和 <code>key_fsm.qsf</code>，把顶层、器件、Verilog 文件和四个引脚写进去。约束文件是可审查、可复现的工程源文件，不必依赖 Pin Planner。</li>
+</ol>
+
+<h2>四、命令行主线：一个 Makefile 串起仿真、编译和下载</h2>
+<p>沿用第 3 课的 Makefile 习惯，新增 <code>sim/tb_key_fsm.sv</code>，并把 Makefile 放在练习根目录。先定义变量：</p>
+<pre><code>MSBIN := /tool/altera/13.0sp1/modelsim_ase/bin
+QBIN  := /tool/altera/13.0sp1/quartus/bin
+ROOT  := $(CURDIR)
+PRJ   := $(ROOT)/sp1_prj
+TOP   := tb_key_fsm
+SOF   := $(PRJ)/output_files/key_fsm.sof
+
+.PHONY: sim wave quartus sof program clean
+</code></pre>
+<p><code>quartus_sh --flow compile</code> 会依次完成 Analysis &amp; Synthesis、Fitter、Assembler 和时序分析，输出报告和 <code>.sof</code>：</p>
+<pre><code>sim:
+	cd sim &amp;&amp; $(MSBIN)/vlib work
+	cd sim &amp;&amp; $(MSBIN)/vlog -quiet ../src/key_fsm.v tb_key_fsm.sv
+	cd sim &amp;&amp; $(MSBIN)/vsim -c $(TOP) -do "vcd file key_fsm.vcd; vcd add -r sim:/$(TOP)/*; run -all; quit -f"
+
+wave: sim
+	gtkwave sim/key_fsm.vcd
+
+quartus:
+	$(QBIN)/quartus_sh --flow compile $(PRJ)/key_fsm
+
+sof: quartus
+	@test -s $(SOF)
+
+program: sof
+	$(QBIN)/quartus_pgm -c USB-Blaster -m JTAG -o "p;$(SOF)"
+
+clean:
+	rm -rf sim/work sim/key_fsm.vcd sim/transcript $(PRJ)/db $(PRJ)/incremental_db $(PRJ)/output_files
+</code></pre>
+<p>常用入口是 <code>make sim</code>、<code>make wave</code>、<code>make quartus</code> 和 <code>make program</code>。下载前确认 <code>jtagconfig</code> 能看到 USB-Blaster；<code>program</code> 默认不挂到 <code>all</code>，避免误下载。</p>
+
+<h3>4.1 用命令行生成最小 QSF</h3>
+<p>把下面内容保存为 <code>sp1_prj/key_fsm.qsf</code>：</p>
+<pre><code>set_global_assignment -name FAMILY "Cyclone IV E"
+set_global_assignment -name DEVICE EP4CE10F17C8
+set_global_assignment -name TOP_LEVEL_ENTITY key_fsm
+set_global_assignment -name VERILOG_FILE ../src/key_fsm.v
+set_location_assignment PIN_E1  -to sys_clk
+set_location_assignment PIN_M15 -to sys_rst_n
+set_location_assignment PIN_M2  -to key_in
+set_location_assignment PIN_L7  -to led_out
+</code></pre>
+<p>引脚分配、顶层实体和器件都在文本中，适合版本控制。GUI 的 Pin Planner 只作为核对工具；真正编译以 QSF 为准。</p>
+
+<h2>五、用 Makefile 验证每条路径</h2>
+<p>沿用第 3 课的 Makefile 习惯，新增 <code>sim/tb_key_fsm.sv</code>。本课 testbench 至少覆盖四件事：</p>
+<ul>
+  <li>复位后状态为 <code>IDLE</code>，所有事件脉冲为 0。</li>
+  <li>短按：按下并在阈值前松开，<code>short_pulse</code> 恰好一拍，<code>long_pulse</code> 不出现。</li>
+  <li>长按：保持超过 <code>LONG_CNT_MAX</code>，只进入一次 <code>LONG</code>，释放后回到 <code>IDLE</code>。</li>
+  <li>非法状态恢复：用层次引用（仅用于仿真）把状态写成非法值，下一状态应回到 <code>IDLE</code>。</li>
+</ul>
+<p>仿真结束时用 <code>$display</code> 打印 PASS/FAIL 并用 <code>$finish</code> 退出。GTKWave 中重点观察：
+<code>current_state</code>、长按计数器、两个事件脉冲和 <code>led_out</code>。先 Zoom Fit，再量脉冲宽度是否为 20ns。</p>
+
+<h2>六、GUI 只保留三种用途</h2>
+<ol>
+  <li><strong>看波形：</strong><code>make wave</code> 启动 GTKWave；不要依赖 ModelSim GUI。</li>
+  <li><strong>核对约束：</strong>需要时打开 Quartus 的 Pin Planner，检查 QSF 是否被正确解析。</li>
+  <li><strong>观察下载：</strong>需要图形化确认时打开 Programmer；日常下载使用 <code>make program</code>。</li>
+</ol>
+
+<h2>七、检索练习</h2>
+<div class="quiz" data-answer="1">
+  <p class="q">1. 三段式 FSM 中，状态寄存器的职责是什么？</p>
+  <button>根据输入立即计算所有输出</button>
+  <button>在时钟沿保存 next_state，形成 current_state</button>
+  <button>只负责产生组合逻辑中的默认值</button>
+  <div class="explain">状态寄存器是记忆元件，只在时钟沿更新；下一状态和输出的计算由另外的组合或时序逻辑完成。</div>
+</div>
+<div class="quiz" data-answer="0">
+  <p class="q">2. 为什么事件脉冲通常在输出时序块开头默认清零？</p>
+  <button>保证事件只保持一个时钟周期，满足脉冲语义</button>
+  <button>让组合逻辑自动推导出锁存器</button>
+  <button>把异步输入变成同步输入</button>
+  <div class="explain">每拍先清零，再在满足条件的那一拍置 1，脉冲自然只有一拍。异步输入同步化是另一个问题，需要双触发器等结构。</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">3. 在组合状态转移块中漏写某个分支，最可能出现什么问题？</p>
+  <button>计数器自动扩展一位</button>
+  <button>时钟频率改变</button>
+  <button>工具推导锁存器，或电路在某些条件下保持非预期值</button>
+  <div class="explain">组合逻辑必须对所有输入给出结果。默认自保持和 default 分支能减少遗漏，也让非法状态有恢复路径。</div>
+</div>
+
+<h2>八、通关标准与下一课</h2>
+<ol>
+  <li>仿真中短按、长按、释放三条路径都通过，事件脉冲没有多拍或漏拍。</li>
+  <li>上板后短按只翻转一次；长按进入可见闪烁；松开后回到空闲。</li>
+  <li>能解释：状态寄存器保存什么、转移条件在哪里、为什么输出脉冲必须被寄存器捕获。</li>
+</ol>
+<p>完成后下一步是流水灯：把 FSM 的状态从“按键阶段”换成“LED 序列阶段”，练习状态编码、组合逻辑和多路输出。</p>
+
+<h2 id="ref">九、本课资源</h2>
+<ul>
+  <li><strong>主资源：</strong>《FPGA Verilog 开发实战指南（上）》第 14 章及官方例程 <code>征途Pro/14_fsm/</code>。</li>
+  <li><strong>复用：</strong><a href="../reference/gtkwave-cheatsheet.html">GTKWave 常用操作速查卡</a>；仿真统一使用 <code>make sim</code>、<code>make wave</code>、<code>make clean</code>。</li>
+  <li><strong>引脚：</strong><code>sys_clk=PIN_E1</code>、<code>sys_rst_n=PIN_M15</code>、<code>KEY1=PIN_M2</code>、<code>LED=PIN_L7</code>。</li>
+</ul>
+
+<div class="teacher">
+  <p><strong>随时问我：</strong>状态图画不顺、仿真路径不全、Makefile 或综合结果异常，把状态表、波形或报错贴过来。</p>
+</div>
+<nav class="lesson-nav">
+  <a href="../index.html">← 课程总览</a>
+  <a href="0003-key-debounce.html">← 上一篇：第 3 课 · 按键消抖</a>
+</nav>
+
+<script>
+document.querySelectorAll('.quiz').forEach(function (quiz) {
+  var answer = parseInt(quiz.dataset.answer, 10);
+  var buttons = quiz.querySelectorAll('button');
+  var done = false;
+  buttons.forEach(function (btn, i) {
+    btn.addEventListener('click', function () {
+      if (done) return;
+      done = true;
+      btn.classList.add(i === answer ? 'correct' : 'wrong');
+      if (i !== answer) buttons[answer].classList.add('correct');
+      quiz.querySelector('.explain').classList.add('show');
+    });
+  });
+});
+</script>
+</body>
+</html>
