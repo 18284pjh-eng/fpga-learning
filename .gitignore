@@ -44,3 +44,12 @@ Thumbs.db
 debug.log
 *.vcd
 rtl_work/
+
+# Quartus-generated simulation model files
+**/simulation/modelsim/*.vho
+**/simulation/modelsim/*.vo
+**/simulation/modelsim/*.svo
+**/simulation/modelsim/*.sdo
+**/simulation/modelsim/*.sft
+**/simulation/modelsim/*.xrf
+**/simulation/modelsim/*.cdf

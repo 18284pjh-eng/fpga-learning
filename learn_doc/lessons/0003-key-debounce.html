@@ -85,8 +85,8 @@
     int i;
     // 抖动期：电平随机横跳 8 次，间隔 0~200ns
     for (i = 0; i &lt; 8; i++) begin
-        key_in = $urandom_range(0, 1);
-        #(20 + $urandom_range(0, 180));
+        key_in = $urandom_range(1, 0);
+        #(20 + $urandom_range(180, 0));
     end
     key_in = 1'b0;                 // 稳定按下
     #(T_STABLE);                   // 稳定时间 &gt; 消抖时长，必出 flag
@@ -103,7 +103,105 @@ endtask</code></pre>
 
 <h2>四、实战 C：Makefile —— 仿真流程工程化</h2>
 
-<p>你天天写 Makefile，这块让你自己来。需求清单（先自己写，卡住看答案）：</p>
+<p>这一节不要求你背 Makefile 语法，而是从一个空文件开始，亲手把“建库 → 编译 → 运行 → 生成波形”串起来。
+  先进入练习目录确认文件：</p>
+<pre><code>cd /home/pjh/project/fpga_learning/test/case/03-key-filter/sim
+ls ../src/key_filter.v tb_key_filter.sv
+</code></pre>
+<p>如果 <code>tb_key_filter.sv</code> 还不存在，先按上一节的要求创建它。Makefile 中的相对路径都是相对于
+  <strong>Makefile 所在的 sim 目录</strong>解析的，所以 <code>../src/key_filter.v</code> 指向 RTL。</p>
+
+<h3>4.1 先理解 Makefile 的四个词</h3>
+<table>
+  <tr><th>词</th><th>本课中的含义</th></tr>
+  <tr><td>变量</td><td>把工具路径、文件名集中命名，例如 <code>$(VLOG)</code>，以后换实验只改一处。</td></tr>
+  <tr><td>目标 target</td><td>你要执行的动作，例如 <code>sim</code>、<code>wave</code>、<code>clean</code>。</td></tr>
+  <tr><td>依赖 prerequisite</td><td>目标依赖的文件，例如 VCD 依赖 RTL 和 testbench。</td></tr>
+  <tr><td>配方 recipe</td><td>目标下面真正执行的 shell 命令；每行开头必须是一个 TAB，不能用空格。</td></tr>
+</table>
+<p>最小结构长这样：</p>
+<pre><code>目标: 依赖
+	要执行的命令
+</code></pre>
+<p>第一条没有依赖的目标会成为默认目标，所以把 <code>sim</code> 写在第一个，执行裸命令 <code>make</code> 就等于 <code>make sim</code>。</p>
+
+<h3>4.2 第一步：只写变量</h3>
+<p>新建空文件 <code>sim/Makefile</code>，先写下面内容：</p>
+<pre><code>MSBIN := /tool/altera/13.0sp1/modelsim_ase/bin
+VLIB  := $(MSBIN)/vlib
+VLOG  := $(MSBIN)/vlog
+VSIM  := $(MSBIN)/vsim
+
+TOP := tb_key_filter
+VCD := key_filter.vcd
+RTL := ../src/key_filter.v
+TB  := tb_key_filter.sv
+</code></pre>
+<p>变量使用 <code>$(变量名)</code> 展开。这里的 <code>:=</code> 表示立即保存右侧文本；本课不需要纠结它和 <code>=</code> 的高级差异。
+  现在执行 <code>make -n</code>，因为还没有目标，它只会提示没有规则；这是正常的。等下一步写入 <code>sim</code> 目标后，再用 <code>make -n sim</code> 检查展开结果。</p>
+
+<h3>4.3 第二步：先做一个能跑的 sim 目标</h3>
+<p>把下面目标加到变量后面。三条命令分别对应 ModelSim 的三个阶段：</p>
+<pre><code>.PHONY: sim
+
+sim:
+	if [ ! -d work ]; then $(VLIB) work; fi
+	$(VLOG) -quiet $(RTL) $(TB)
+	$(VSIM) -c $(TOP) -do "vcd file $(VCD); vcd add -r sim:/$(TOP)/*; run -all; quit -f"
+</code></pre>
+<ol>
+  <li><code>vlib work</code> 创建 ModelSim 的编译库。目录已存在时跳过，避免重复运行报错。</li>
+  <li><code>vlog</code> 编译 RTL 和 testbench。注意 <code>$(TB)</code> 是当前 sim 目录下的文件。</li>
+  <li><code>vsim -c</code> 启动控制台模式；<code>-do</code> 后面是一串 ModelSim 命令：创建 VCD、递归加入信号、运行到 <code>$finish</code>，最后退出。</li>
+</ol>
+<p>现在运行：</p>
+<pre><code>make sim
+</code></pre>
+<p>只要某一行命令返回非零状态，Make 会停止，不会继续假装仿真成功。先看第一个报错，不要只看最后一行。</p>
+
+<h3>4.4 第三步：把波形和清理做成目标</h3>
+<pre><code>.PHONY: wave clean
+
+wave: sim
+	gtkwave $(VCD)
+
+clean:
+	rm -rf work $(VCD) transcript vsim.wlf
+</code></pre>
+<p><code>wave: sim</code> 表示执行 <code>make wave</code> 前先确保 <code>sim</code> 完成；<code>clean</code> 用 <code>rm -rf</code> 删除可重新生成的产物。
+  因此日常循环是：</p>
+<pre><code>make clean
+make sim
+make wave
+</code></pre>
+
+<h3>4.5 第四步：加入文件依赖，理解增量构建</h3>
+<p>如果希望源码没改时不重复仿真，可以把 <code>sim</code> 改成文件依赖：</p>
+<pre><code>.PHONY: sim wave clean
+
+sim: $(VCD)
+	@echo "仿真完成: $(VCD)"
+
+$(VCD): $(RTL) $(TB)
+	if [ ! -d work ]; then $(VLIB) work; fi
+	$(VLOG) -quiet $(RTL) $(TB)
+	$(VSIM) -c $(TOP) -do "vcd file $(VCD); vcd add -r sim:/$(TOP)/*; run -all; quit -f"
+</code></pre>
+<p>Make 会比较时间戳：只要 <code>key_filter.v</code> 或 <code>tb_key_filter.sv</code> 比 VCD 新，就重跑；否则直接认为目标已是最新。
+  如果你修改了 testbench 但时间戳异常，执行 <code>make clean</code> 强制重来。</p>
+
+<h3>4.6 常见命令和排错顺序</h3>
+<table>
+  <tr><th>命令</th><th>用途</th></tr>
+  <tr><td><code>make -n sim</code></td><td>只打印命令，检查变量和路径。</td></tr>
+  <tr><td><code>make -B sim</code></td><td>忽略时间戳，强制执行目标。</td></tr>
+  <tr><td><code>make clean &amp;&amp; make sim</code></td><td>删除旧库和波形后重新仿真。</td></tr>
+  <tr><td><code>make VCD=other.vcd sim</code></td><td>临时覆盖变量，验证 Makefile 的可配置性。</td></tr>
+</table>
+<p>看到 <code>vlib: command not found</code>，先检查 <code>MSBIN</code>；看到 <code>Cannot find top-level module</code>，检查 <code>TOP</code> 和 testbench 模块名；
+  看到 <code>near "...": syntax error</code>，这是 Verilog/SystemVerilog 编译错误，不是 Makefile 错误。</p>
+
+<p>下面是本节的需求清单。建议先自己写完，再展开参考答案：</p>
 
 <ol>
   <li>Makefile 放在 <code>sim/</code> 目录，工作目录（<code>work/</code> 库、VCD）也生成在 <code>sim/</code> 下——别再埋进 sp1_prj 深处。</li>
@@ -132,7 +230,7 @@ sim: $(VCD)
 	@echo "== 仿真完成，波形: $(CURDIR)/$(VCD)  (make wave 查看)"
 
 $(VCD): $(RTL) $(TB)
-	$(VLIB) work
+	if [ ! -d work ]; then $(VLIB) work; fi
 	$(VLOG) -quiet $(RTL) $(TB)
 	$(VSIM) -c $(TOP) -do "vcd file $(VCD); vcd add -r sim:/$(TOP)/*; run -all; quit -f"
 
@@ -147,8 +245,7 @@ clean:
 <div class="teacher">
   <p><strong>老师提示：</strong>注意参考答案把 VCD 声明为<strong>目标文件依赖 RTL/TB 源码</strong>——
   源码没改时 <code>make sim</code> 不会重跑仿真（增量构建），这是 Makefile 送你的免费福利。
-  顺带一个坑：<code>vlib work</code> 对已存在的库会报错，参考答案依赖 <code>make clean</code> 或容忍该错误——
-  想做得更干净，可以在 shell 命令里先判断目录是否存在。</p>
+  <code>vlib work</code> 对已存在的库会报错，所以答案先用 shell 判断 <code>work</code> 目录是否存在；需要彻底重建时再执行 <code>make clean</code>。</p>
 </div>
 
 <h2>五、检索练习（合上资料答）</h2>
