@@ -1,0 +1,12 @@
+set_global_assignment -name FAMILY "Cyclone IV E"
+set_global_assignment -name DEVICE EP4CE10F17C8
+set_global_assignment -name TOP_LEVEL_ENTITY key_fsm
+set_global_assignment -name VERILOG_FILE ../src/key_fsm.v
+set_global_assignment -name SDC_FILE key_fsm.sdc
+
+set_location_assignment PIN_E1  -to clk
+set_location_assignment PIN_M15 -to rst_n
+set_location_assignment PIN_M2  -to key
+set_location_assignment PIN_L7  -to led
+
+set_global_assignment -name LAST_QUARTUS_VERSION "13.0 SP1"

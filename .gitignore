@@ -42,6 +42,7 @@ vsim.wlf
 *.swp
 Thumbs.db
 debug.log
+*.debug
 *.vcd
 rtl_work/
 
@@ -55,11 +56,10 @@ rtl_work/
 **/simulation/modelsim/*.cdf
 
 # Local reference library; keep these outside the uploaded repository
-/0-征途开发板上电测试程序/
-/1-开发板原理图_封装库_尺寸图_硬件手册/
-/2-野火开源图书合集（源代码以及文档）/
-/4-推荐参考资料/
-/5-模块资料/
-/野火产品选型手册/
-/[[]野火[]]*.pdf
-/Untitled
+firebbs_doc/0-征途开发板上电测试程序/
+# firebbs_doc/1-开发板原理图_封装库_尺寸图_硬件手册/
+firebbs_doc/2-野火开源图书合集（源代码以及文档）/
+firebbs_doc/4-推荐参考资料/
+firebbs_doc/5-模块资料/
+firebbs_doc/野火产品选型手册/
+# firebbs_doc/[[]野火[]]*.pdf

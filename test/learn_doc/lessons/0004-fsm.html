@@ -51,7 +51,7 @@
   <tr><th>当前状态</th><th>条件</th><th>下一状态</th><th>事件</th></tr>
   <tr><td><code>IDLE</code></td><td><code>key_in == 0</code></td><td><code>PRESSED</code></td><td>无</td></tr>
   <tr><td><code>PRESSED</code></td><td>松开</td><td><code>IDLE</code></td><td><code>short_pulse</code></td></tr>
-  <tr><td><code>PRESSED</code></td><td>计时达到长按阈值</td><td><code>LONG</code></td><td><code>long_pulse</code></td></tr>
+  <tr><td><code>PRESSED</code></td><td>计时达到长按阈值</td><td><code>LONG</code></td><td><code>long_enable</code></td></tr>
   <tr><td><code>LONG</code></td><td>仍按住</td><td><code>LONG</code></td><td>周期性闪烁</td></tr>
   <tr><td><code>LONG</code></td><td>松开</td><td><code>IDLE</code></td><td>无</td></tr>
 </table>
@@ -100,10 +100,10 @@ end</code></pre>
 <h2>三、实战 A：短按/长按控制器</h2>
 <p>练习场：<code>test/case/04-key-fsm/</code>，目录沿用前三课的 <code>src/</code>、<code>sim/</code>、<code>sp1_prj/</code>。</p>
 <ol class="steps">
-  <li><strong>先画状态图和时序图。</strong>画出复位、稳定按下、长按阈值、松开四段；标出 <code>short_pulse</code> 与 <code>long_pulse</code> 只出现一拍的位置。</li>
-  <li><strong>写 <code>src/key_fsm.v</code>。</strong>输入为 <code>sys_clk</code>、<code>sys_rst_n</code>、第 3 课输出的干净 <code>key_flag</code> 或稳定按键电平；输出为 <code>led_out</code>。建议先只完成短按路径，再加长按。</li>
+  <li><strong>先画状态图和时序图。</strong>画出复位、稳定按下、长按阈值、松开四段；标出 <code>short_pulse</code> 的单拍位置，以及 <code>long_enable</code> 的持续有效区间。</li>
+  <li><strong>写 <code>src/key_fsm.v</code>。</strong>本工程顶层模块名是 <code>key_fsm</code>，当前端口名为 <code>clk</code>、<code>rst_n</code>、<code>key</code>、<code>led</code>。建议先只完成短按路径，再加长按。QSF 中的端口名称必须和这里逐字一致。</li>
   <li><strong>加入参数。</strong>用 <code>parameter LONG_CNT_MAX</code> 控制长按时长。真实板上可按 50MHz 计算，仿真例化时改成 <code>20'd99</code>，不要修改 RTL 中的物理时钟假设。</li>
-  <li><strong>连接输出。</strong>短按事件让 <code>led_out</code> 翻转一次；进入 <code>LONG</code> 后用一个小分频计数器让 LED 周期闪烁。LED 是寄存器，不要直接接一拍脉冲。</li>
+  <li><strong>连接输出。</strong>短按事件让 <code>led</code> 翻转一次；进入 <code>LONG</code> 后用一个小分频计数器让 LED 周期闪烁。LED 是寄存器，不要直接接一拍脉冲。</li>
   <li><strong>用文本写工程约束。</strong>创建 <code>sp1_prj/key_fsm.qpf</code> 和 <code>key_fsm.qsf</code>，把顶层、器件、Verilog 文件和四个引脚写进去。约束文件是可审查、可复现的工程源文件，不必依赖 Pin Planner。</li>
 </ol>
 
@@ -113,12 +113,17 @@ end</code></pre>
 QBIN  := /tool/altera/13.0sp1/quartus/bin
 ROOT  := $(CURDIR)
 PRJ   := $(ROOT)/sp1_prj
+PROJECT := $(PRJ)/key_fsm
+REV   := key_fsm
 TOP   := tb_key_fsm
-SOF   := $(PRJ)/output_files/key_fsm.sof
+SOF   := $(PRJ)/key_fsm.sof
+Q64   := --64bit
+QP    := --parallel=8
 
-.PHONY: sim wave quartus sof program clean
+.PHONY: sim wave map fit asm sof timing quartus program clean distclean
 </code></pre>
-<p><code>quartus_sh --flow compile</code> 会依次完成 Analysis &amp; Synthesis、Fitter、Assembler 和时序分析，输出报告和 <code>.sof</code>：</p>
+<p><code>quartus_sh --flow compile</code> 会依次完成 Analysis &amp; Synthesis、Fitter、Assembler 和时序分析，适合完整检查；
+  练习中用 Map、Fit、Assembler 拆开的目标生成 <code>.sof</code>，再用单独的 <code>timing</code> 目标运行时序分析：</p>
 <pre><code>sim:
 	cd sim &amp;&amp; $(MSBIN)/vlib work
 	cd sim &amp;&amp; $(MSBIN)/vlog -quiet ../src/key_fsm.v tb_key_fsm.sv
@@ -127,43 +132,254 @@ SOF   := $(PRJ)/output_files/key_fsm.sof
 wave: sim
 	gtkwave sim/key_fsm.vcd
 
-quartus:
-	$(QBIN)/quartus_sh --flow compile $(PRJ)/key_fsm
+map:
+	$(QBIN)/quartus_map $(Q64) $(QP) $(PROJECT) -c $(REV)
 
-sof: quartus
+fit: map
+	$(QBIN)/quartus_fit $(Q64) $(QP) $(PROJECT) -c $(REV)
+
+asm: fit
+	$(QBIN)/quartus_asm $(Q64) $(PROJECT) -c $(REV)
+
+sof: asm
 	@test -s $(SOF)
 
-program: sof
+timing: fit
+	$(QBIN)/quartus_sta $(Q64) $(QP) $(PROJECT) -c $(REV)
+
+quartus:
+	$(QBIN)/quartus_sh $(Q64) --flow compile $(PROJECT)
+
+program:
+	@test -s $(SOF) || { echo "SOF not found; run 'make sof' first"; exit 1; }
 	$(QBIN)/quartus_pgm -c USB-Blaster -m JTAG -o "p;$(SOF)"
 
 clean:
 	rm -rf sim/work sim/key_fsm.vcd sim/transcript $(PRJ)/db $(PRJ)/incremental_db $(PRJ)/output_files
-</code></pre>
-<p>常用入口是 <code>make sim</code>、<code>make wave</code>、<code>make quartus</code> 和 <code>make program</code>。下载前确认 <code>jtagconfig</code> 能看到 USB-Blaster；<code>program</code> 默认不挂到 <code>all</code>，避免误下载。</p>
 
-<h3>4.1 用命令行生成最小 QSF</h3>
-<p>把下面内容保存为 <code>sp1_prj/key_fsm.qsf</code>：</p>
-<pre><code>set_global_assignment -name FAMILY "Cyclone IV E"
+distclean: clean
+	rm -f $(SOF) $(PRJ)/*.rpt $(PRJ)/*.summary $(PRJ)/*.sof
+</code></pre>
+<p>常用入口是 <code>make sim</code>、<code>make wave</code>、<code>make sof</code>、<code>make timing</code> 和 <code>make program</code>。
+  <code>make sof</code> 只运行生成可下载文件所需的 Map、Fit 和 Assembler；<code>make timing</code> 单独运行 TimeQuest；
+  <code>make quartus</code> 才运行完整流程。<code>make program</code> 只烧录已有的 <code>.sof</code>，不会因为烧录而重新编译。
+  下载前确认 <code>jtagconfig</code> 能看到 USB-Blaster。</p>
+
+<h3>4.1 从零创建 Quartus 工程描述文件</h3>
+<p>先分清两个文件各自负责什么：</p>
+<table>
+  <tr><th>文件</th><th>作用</th><th>你可以怎样理解</th></tr>
+  <tr><td><code>key_fsm.qpf</code></td><td>Quartus Project File，指定工程修订版（revision）名称。</td><td>工程入口/目录索引。</td></tr>
+  <tr><td><code>key_fsm.qsf</code></td><td>Quartus Settings File，保存器件、顶层、源文件和引脚等设置。</td><td>工程配置清单。</td></tr>
+</table>
+<p>两个文件名的主干要一致，且本课把它们放在 <code>sp1_prj/</code>。从仓库根目录执行：</p>
+<pre><code>cd /home/pjh/project/fpga_learning
+mkdir -p test/case/04-key-fsm/sp1_prj
+</code></pre>
+<p><code>mkdir -p</code> 会创建目录；目录已存在也不会报错。接下来用文本编辑器创建文件。下面用 shell here-document 展示完整内容，
+  你可以照着在编辑器里输入；如果直接复制命令，结尾的 <code>EOF</code> 必须单独占一行。</p>
+
+<p><strong>第一步：创建 <code>sp1_prj/key_fsm.qpf</code>。</strong>这三项分别是 Quartus 文件格式版本、文件生成日期和工程 revision 名称：</p>
+<pre><code>cat &gt; test/case/04-key-fsm/sp1_prj/key_fsm.qpf &lt;&lt;'EOF'
+QUARTUS_VERSION = "13.0"
+DATE = "09:00:00  SEPTEMBER 26, 2026"
+PROJECT_REVISION = "key_fsm"
+EOF
+</code></pre>
+<p><code>PROJECT_REVISION</code> 必须与工程名相符。Quartus 会据此读取同目录下的 <code>key_fsm.qsf</code>，所以别把一个文件叫
+  <code>key_fsm</code>、另一个叫 <code>fsm</code>。</p>
+
+<p><strong>第二步：创建 <code>sp1_prj/key_fsm.qsf</code>。</strong>先照当前顶层模块和端口名填写：</p>
+<pre><code>cat &gt; test/case/04-key-fsm/sp1_prj/key_fsm.qsf &lt;&lt;'EOF'
+set_global_assignment -name FAMILY "Cyclone IV E"
 set_global_assignment -name DEVICE EP4CE10F17C8
 set_global_assignment -name TOP_LEVEL_ENTITY key_fsm
 set_global_assignment -name VERILOG_FILE ../src/key_fsm.v
-set_location_assignment PIN_E1  -to sys_clk
-set_location_assignment PIN_M15 -to sys_rst_n
-set_location_assignment PIN_M2  -to key_in
-set_location_assignment PIN_L7  -to led_out
+
+set_location_assignment PIN_E1  -to clk
+set_location_assignment PIN_M15 -to rst_n
+set_location_assignment PIN_M2  -to key
+set_location_assignment PIN_L7  -to led
+EOF
 </code></pre>
-<p>引脚分配、顶层实体和器件都在文本中，适合版本控制。GUI 的 Pin Planner 只作为核对工具；真正编译以 QSF 为准。</p>
+<p>每行的意思：</p>
+<table>
+  <tr><th>QSF 设置</th><th>作用</th></tr>
+  <tr><td><code>FAMILY</code></td><td>芯片系列；征途 Pro 使用 Cyclone IV E。</td></tr>
+  <tr><td><code>DEVICE</code></td><td>具体 FPGA 型号；板上是 EP4CE10F17C8。</td></tr>
+  <tr><td><code>TOP_LEVEL_ENTITY</code></td><td>Quartus 从哪个 Verilog 模块开始搭建整张电路图；这里是 <code>module key_fsm</code>。</td></tr>
+  <tr><td><code>VERILOG_FILE</code></td><td>加入要编译的 RTL 源码。相对路径从工程目录 <code>sp1_prj/</code> 出发，<code>../src/key_fsm.v</code> 因此回到本课的 <code>src/</code>。</td></tr>
+  <tr><td><code>set_location_assignment</code></td><td>把顶层端口接到芯片封装引脚。<code>-to</code> 后面必须是 RTL 顶层端口名，而不是你想起的别名。</td></tr>
+</table>
+<p>本工程当前的对应关系是：板载 50MHz 时钟接 <code>PIN_E1</code>，低有效复位接 <code>PIN_M15</code>，KEY1 接 <code>PIN_M2</code>，低电平点亮的 LED 接 <code>PIN_L7</code>。
+  如果你把 Verilog 端口从 <code>clk/rst_n/key/led</code> 改名成 <code>sys_clk/sys_rst_n/key_in/led_out</code>，QSF 四个 <code>-to</code> 名称也要一起改；引脚编号保持不变。</p>
+
+<h3>4.2 添加最小时序约束（SDC）</h3>
+<p>QSF 负责告诉 Quartus“有哪些文件和引脚”，SDC 负责告诉 TimeQuest“这些信号应该以什么时间工作”。
+  没有 SDC 时，Quartus 仍然可以综合、布局布线并生成 <code>.sof</code>，但它不知道 <code>clk</code> 的真实频率，
+  时序报告和部分优化就没有可靠依据。本板的时钟是 50MHz，因此一个周期是：</p>
+<pre><code>1 / 50,000,000 Hz = 20 ns
+</code></pre>
+<p>在工程目录中创建 <code>sp1_prj/key_fsm.sdc</code>：</p>
+<pre><code>create_clock -name clk -period 20.000 [get_ports {clk}]
+derive_clock_uncertainty
+</code></pre>
+<p><code>create_clock</code> 将顶层端口 <code>clk</code> 定义为 20ns 周期；<code>derive_clock_uncertainty</code> 让 Quartus
+  根据器件和时钟生成默认不确定度。这里没有给 <code>key</code> 或 <code>rst_n</code> 随意添加输入延时：它们来自按键，
+  并且 <code>key</code> 先经过同步触发器；没有外部器件时序数据，就不应该编造一个输入延时数字。</p>
+<p>然后在 <code>key_fsm.qsf</code> 中加入：</p>
+<pre><code>set_global_assignment -name SDC_FILE key_fsm.sdc
+</code></pre>
+<p>路径相对于 <code>sp1_prj/</code>，所以文件名直接写 <code>key_fsm.sdc</code>。用命令行验证：</p>
+<pre><code>cd test/case/04-key-fsm
+make timing
+</code></pre>
+<p>日志中应看到类似 <code>create_clock -period 20.000 -name clk</code>，不应再看到“SDC file not found”或工具自动猜测
+  <code>create_clock -period 1.000</code>。时序约束不会让烧录动作变慢；它只在 Map/Fit/TimeQuest 阶段影响优化和检查。</p>
+
+<p><strong>第三步：自己检查文件和路径。</strong></p>
+<pre><code>cat test/case/04-key-fsm/sp1_prj/key_fsm.qpf
+cat test/case/04-key-fsm/sp1_prj/key_fsm.qsf
+test -f test/case/04-key-fsm/src/key_fsm.v &amp;&amp; echo "RTL path OK"
+</code></pre>
+<p>这一步不打开 Quartus GUI。QPF/QSF 都是普通文本，所以可以用 <code>cat</code> 查看、用 Git diff 审核；编译时 Quartus 会读取它们。</p>
+
+<p><strong>第四步：从命令行打开并编译这个工程。</strong>在本课根目录运行：</p>
+<pre><code>cd test/case/04-key-fsm
+/tool/altera/13.0sp1/quartus/bin/quartus_sh --flow compile sp1_prj/key_fsm
+</code></pre>
+<p>Quartus 根据 <code>sp1_prj/key_fsm.qpf</code> 找到 revision，再读 <code>key_fsm.qsf</code> 中的设置。
+  <code>make sof</code> 完成分析综合、布局布线和 Assembler 后，<code>.sof</code> 位于 <code>sp1_prj/key_fsm.sof</code>；
+  <code>make timing</code> 再单独运行 TimeQuest。当前 FSM RTL 仍是练习草稿，完成 RTL 后再期待编译通过；若失败，先看终端最早出现的 <code>Error</code>，
+  区分 Verilog 错误与 QSF 路径/端口名错误。</p>
+
+<p>QSF 是实际编译使用的配置。Pin Planner 可以打开来核对分配结果，但你无需通过 GUI 才能创建或维护工程约束。</p>
 
 <h2>五、用 Makefile 验证每条路径</h2>
-<p>沿用第 3 课的 Makefile 习惯，新增 <code>sim/tb_key_fsm.sv</code>。本课 testbench 至少覆盖四件事：</p>
+<p>这一节的目标不是“把波形跑出来”，而是让 testbench 对每一条状态转移提出一个可检查的问题：
+  复位后在哪里？稳定按下后是否进入 <code>PRESSED</code>？短按是否只翻转一次？长按是否等到计数完成才进入 <code>LONG</code>？</p>
+
+<h3>5.1 先把真实时间缩小</h3>
+<p>RTL 默认参数面向开发板：50MHz 时钟下，消抖约 20ms，长按约 1s，LED 分频也需要较长时间。
+  如果 testbench 直接使用这些值，每个场景要等待数千万个时钟。仿真时通过例化参数覆盖把它们缩小，
+  但时钟仍保持 50MHz 的时间关系：</p>
+<pre><code>key_fsm #(
+    .CNT_MAX(3),
+    .BLINK_DIV_MAX(4),
+    .LONG_CNT_MAX(8)
+) dut (
+    .clk  (clk),
+    .rst_n(rst_n),
+    .key  (key),
+    .led  (led)
+);
+</code></pre>
+<p>这三个数只服务于仿真速度。不要把 testbench 的小参数写回 RTL 默认值，否则上板后的时间尺度会被改变。</p>
+
+<h3>5.2 先写时钟、复位和按键动作</h3>
+<p>按键是低有效：<code>key=1</code> 表示松开，<code>key=0</code> 表示按下。时钟每 10ns 一个周期，复位保持几个周期后再释放。
+  建议先创建 <code>sim/tb_key_fsm.sv</code>，只写下面的骨架，然后逐步加入检查：</p>
+<pre><code>`timescale 1ns/1ps
+
+module tb_key_fsm;
+    reg clk = 1'b0;
+    reg rst_n = 1'b0;
+    reg key = 1'b1;
+    wire led;
+    integer errors = 0;
+
+    localparam integer DEBOUNCE_MAX = 3;
+    localparam integer BLINK_MAX = 4;
+    localparam integer LONG_MAX = 8;
+
+    always #5 clk = ~clk;
+
+    key_fsm #(
+        .CNT_MAX(DEBOUNCE_MAX),
+        .BLINK_DIV_MAX(BLINK_MAX),
+        .LONG_CNT_MAX(LONG_MAX)
+    ) dut (
+        .clk(clk), .rst_n(rst_n), .key(key), .led(led)
+    );
+
+    task automatic tick(input integer n);
+        repeat (n) @(posedge clk);
+    endtask
+
+    task automatic check(input integer condition, input [8*80-1:0] message);
+        if (condition)
+            $display("PASS: %0s", message);
+        else begin
+            $display("FAIL: %0s", message);
+            errors = errors + 1;
+        end
+    endtask
+
+    initial begin
+        // 场景将在这里依次加入
+        tick(4);
+        rst_n = 1'b1;
+        tick(4);
+
+        if (errors == 0) $display("TEST PASS");
+        else $display("TEST FAIL: %0d error(s)", errors);
+        $finish;
+    end
+endmodule
+</code></pre>
+<p><code>tick</code> 把“等待几个时钟沿”封装起来，避免在每个场景中散落很多 <code>#</code> 延时。
+  检查状态时使用 <code>@(posedge clk); #1</code> 或 <code>tick(1); #1</code>，给非阻塞赋值留出一个 delta cycle，
+  再读取波形和内部寄存器。</p>
+
+<h3>5.3 按场景逐个验证</h3>
+<p><strong>场景 A：复位。</strong>复位期间检查 <code>dut.cur_state == 2'd0</code>、<code>dut.short_pulse == 0</code>、
+  <code>dut.long_enable == 0</code>，释放复位后再等待同步器稳定。这里用数字是因为当前 RTL 用 <code>localparam</code> 声明状态编码，
+  testbench 不能直接访问模块内部的局部参数名。</p>
+
+<p><strong>场景 B：短按。</strong>先让 <code>key=0</code>，保持足够长时间让双触发器和消抖计数完成；
+  但在 <code>LONG_MAX</code> 到达前恢复 <code>key=1</code>。检查顺序应是：</p>
+<ol>
+  <li>稳定按下后，<code>dut.cur_state</code> 进入 <code>PRESSED</code>（编码 <code>2'd1</code>）。</li>
+  <li>释放后，<code>dut.short_pulse</code> 只为 1 个时钟周期。</li>
+  <li><code>dut.long_enable</code> 从未出现，最终状态回到 <code>IDLE</code>。</li>
+  <li><code>led</code> 相比按下前只翻转一次。</li>
+</ol>
+<p>“只为一拍”不要只看它最终为 0；可以在每个时钟沿累加一个 <code>short_count</code>，仿真结束时检查它是否等于 1。</p>
+
+<p><strong>场景 C：长按。</strong>按下后保持超过 <code>LONG_MAX</code>，检查 <code>long_press_cnt</code> 逐渐增加，
+  计数完成前仍停留在 <code>PRESSED</code>；达到阈值后才进入 <code>LONG</code>（编码 <code>2'd2</code>）。
+  进入 <code>LONG</code> 后，当前 RTL 的 <code>long_enable</code> 是持续使能，不是单拍事件，所以不要把它当作脉冲计数。
+  此时重点检查 <code>blink_div_cnt</code> 周期性归零、<code>led</code> 周期性翻转；释放后状态回到 <code>IDLE</code>，
+  并确认下一次长按从清零后的计数重新开始。</p>
+
+<p><strong>场景 D：非法状态恢复。</strong>这是检查 <code>default</code> 分支的专门场景，不代表真实硬件中可以随意写状态寄存器。
+  在 testbench 中可以临时使用层次引用：</p>
+<pre><code>force dut.cur_state = 2'b11;
+@(posedge clk);
+#1 check(dut.next_state == 2'd0, "illegal state returns to IDLE");
+release dut.cur_state;
+</code></pre>
+<p><code>force/release</code> 只应出现在仿真代码中；这里的 <code>release</code> 是 Verilog 的仿真语句，
+  不能拿来命名 RTL 信号。</p>
+
+<h3>5.4 用 Makefile 运行和看波形</h3>
+<p>完成 testbench 后，在练习根目录运行：</p>
+<pre><code>cd test/case/04-key-fsm
+make sim
+</code></pre>
+<p>终端必须看到每个场景的 <code>PASS</code>，最后看到 <code>TEST PASS</code>。testbench 在有错误时调用 <code>$fatal</code>，
+  因此 <code>make sim</code> 也会返回失败状态。出现失败时，先看第一个失败的检查，不要先从最后的波形猜原因。确认文本检查通过后再运行：</p>
+<pre><code>make wave
+</code></pre>
+<p>GTKWave 中加入或观察这些信号：</p>
 <ul>
-  <li>复位后状态为 <code>IDLE</code>，所有事件脉冲为 0。</li>
-  <li>短按：按下并在阈值前松开，<code>short_pulse</code> 恰好一拍，<code>long_pulse</code> 不出现。</li>
-  <li>长按：保持超过 <code>LONG_CNT_MAX</code>，只进入一次 <code>LONG</code>，释放后回到 <code>IDLE</code>。</li>
-  <li>非法状态恢复：用层次引用（仅用于仿真）把状态写成非法值，下一状态应回到 <code>IDLE</code>。</li>
+  <li>输入：<code>clk</code>、<code>rst_n</code>、<code>key</code>；</li>
+  <li>状态：<code>dut.cur_state</code>、<code>dut.next_state</code>；</li>
+  <li>计数：<code>dut.debounce_cnt</code>、<code>dut.long_press_cnt</code>、<code>dut.blink_div_cnt</code>；</li>
+  <li>输出：<code>dut.short_pulse</code>、<code>dut.long_enable</code>、<code>led</code>。</li>
 </ul>
-<p>仿真结束时用 <code>$display</code> 打印 PASS/FAIL 并用 <code>$finish</code> 退出。GTKWave 中重点观察：
-<code>current_state</code>、长按计数器、两个事件脉冲和 <code>led_out</code>。先 Zoom Fit，再量脉冲宽度是否为 20ns。</p>
+<p>先 Zoom Fit，再逐个场景放大。短按事件应宽一个时钟周期，即 10ns；不要把按键保持时间误认为事件脉冲宽度。
+  波形的作用是解释“为什么通过或失败”，<code>$display</code> 负责输出检查结果，<code>$fatal</code> 负责让 Makefile 识别失败。</p>
 
 <h2>六、GUI 只保留三种用途</h2>
 <ol>
