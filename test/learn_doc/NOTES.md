@@ -32,7 +32,8 @@
 - **第 3 课已完成**（2026-09-13，详见 learning-records/0004-key-filter-complete.md；书第 19 章，官方 10_key_filter）：
   按键消抖 + **用户要求：从第 3 课起仿真一律走 Makefile**（make sim / make wave / make clean），
   参考答案在课程 <details> 里，用户自己先写。
-- **第 4 课当前**：状态机 FSM（书 14_fsm / 官方 14_fsm）——用"长按/短按区分"思考题引入；命令行优先，Makefile 驱动仿真和 Quartus 编译。
+- **第 4 课已完成**：状态机 FSM（书 14_fsm / 官方 14_fsm）——用"长按/短按区分"思考题引入；命令行优先，Makefile 驱动仿真和 Quartus 编译。
+- **第 5 课当前**：流水灯（官方 12_water_led）——练习时钟使能、状态序列、四路低有效 LED 约束；进阶加入正弦查表 PWM 亮度渐变。
 - tb 命名提醒：用户上节课把 tb 模块叫 top，本课要求规范命名 tb_key_filter。
 - 询问用户：MISSION.md 中长期方向是否符合预期（接口驱动？图像？以太网？）。
 

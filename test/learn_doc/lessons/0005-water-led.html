@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 5 课 · 流水灯：时钟使能、状态序列与多路输出</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<h1>第 5 课 · 流水灯：时钟使能、状态序列与多路输出</h1>
+<p class="meta">
+  对应教材：<a href="#ref">《FPGA Verilog 开发实战指南》第 10～13 章</a> ·
+  平台：野火征途 Pro · 预计 120–180 分钟 ·
+  上一篇：<a href="0004-fsm.html">第 4 课 · 状态机 FSM</a>
+</p>
+
+<blockquote>
+  <p><strong>本课的胜利：</strong>让 4 个板载 LED 按固定顺序移动，并用仿真证明每一步只在指定的时钟使能到来时发生。
+  你会把“计时”和“状态序列”拆成两个清楚的电路，再用 Makefile 完成仿真、综合和下载。</p>
+</blockquote>
+
+<h2>〇、开场复习</h2>
+<ol>
+  <li>第 4 课的状态寄存器为什么使用非阻塞赋值？状态在一个时钟沿改变几次？</li>
+  <li>50MHz 时钟下，0.5 秒对应多少个时钟周期？计数器的最大值应写成周期数还是周期数减一？</li>
+  <li>第 4 课的 LED 是低电平点亮。若内部信号表示“亮为 1”，送到引脚前需要做什么？</li>
+</ol>
+
+<div class="teacher">
+  <p><strong>本课的核心：</strong>没有 CPU 的 FPGA 不会执行“等待 0.5 秒”这条指令。
+  计数器每拍前进，数满时产生一个单拍的 <code>step_tick</code>；状态寄存器只在这个使能到来时移动一次。
+  逻辑仍然运行在同一个 <code>clk</code> 时钟域中。</p>
+</div>
+
+<h2>一、先确认板子的四个输出</h2>
+<p>本课顶层模块暂定为 <code>water_led</code>，端口保持简单：</p>
+<table>
+  <tr><th>端口</th><th>方向</th><th>含义</th></tr>
+  <tr><td><code>clk</code></td><td>input</td><td>板载 50MHz 时钟，接 <code>PIN_E1</code></td></tr>
+  <tr><td><code>rst_n</code></td><td>input</td><td>低有效复位，接 <code>PIN_M15</code></td></tr>
+  <tr><td><code>led[3:0]</code></td><td>output</td><td>四个低有效 LED，<code>led[0]</code> 对应 LED1</td></tr>
+</table>
+
+<p>开发板映射表给出的引脚如下。这里的“亮”是电气意义上的低电平，因此建议在 RTL 内部使用
+  <code>led_on[3:0]</code> 表示“亮为 1”，最后统一写 <code>led = ~led_on</code>。</p>
+<table>
+  <tr><th>逻辑信号</th><th>板上器件</th><th>FPGA 引脚</th><th>引脚为 0 时</th></tr>
+  <tr><td><code>led[0]</code></td><td>LED1</td><td><code>PIN_L7</code></td><td>点亮</td></tr>
+  <tr><td><code>led[1]</code></td><td>LED2</td><td><code>PIN_M6</code></td><td>点亮</td></tr>
+  <tr><td><code>led[2]</code></td><td>LED3</td><td><code>PIN_P3</code></td><td>点亮</td></tr>
+  <tr><td><code>led[3]</code></td><td>LED4</td><td><code>PIN_N3</code></td><td>点亮</td></tr>
+</table>
+
+<h2>二、把“慢动作”拆成两个电路</h2>
+<p>不要把 50MHz 的 <code>clk</code> 直接分频成一个新的时钟去驱动状态机。本课只生成一个时钟使能脉冲：</p>
+<pre><code>clk:        _|‾|_|‾|_|‾|_|‾|_|‾|_|‾|_
+step_tick:  ____________________|‾|____
+state:      LED1 ----------------&gt; LED2</code></pre>
+
+<p>计数器的职责只有一件事：数到阈值时让 <code>step_tick</code> 有效一拍，并从零重新计数。
+  状态寄存器的职责也只有一件事：看到 <code>step_tick</code> 后从当前 LED 位置进入下一个位置。</p>
+
+<h3>2.1 周期计算</h3>
+<p>50MHz 的时钟周期是 20ns。若希望每 0.5 秒移动一次：</p>
+<pre><code>0.5 s / 20 ns = 25,000,000 个时钟周期
+计数范围：0 到 24,999,999
+需要位数：ceil(log2(25,000,000)) = 25 位</code></pre>
+<p>因此 RTL 默认参数可以写成 <code>STEP_CNT_MAX = 25'd24_999_999</code>。
+  仿真时用参数覆盖把它改成 3 或 4，不能为了加快仿真而修改 RTL 的默认物理时间。</p>
+
+<h3>2.2 状态表</h3>
+<p>用 2 位保存当前 LED 位置。状态编码只是内部约定，输出由组合逻辑译码：</p>
+<table>
+  <tr><th>状态名</th><th>编码</th><th><code>led_on</code>（亮为 1）</th><th>下一个状态</th></tr>
+  <tr><td><code>LED1</code></td><td><code>2'd0</code></td><td><code>4'b0001</code></td><td>收到 <code>step_tick</code> 后到 LED2</td></tr>
+  <tr><td><code>LED2</code></td><td><code>2'd1</code></td><td><code>4'b0010</code></td><td>收到 <code>step_tick</code> 后到 LED3</td></tr>
+  <tr><td><code>LED3</code></td><td><code>2'd2</code></td><td><code>4'b0100</code></td><td>收到 <code>step_tick</code> 后到 LED4</td></tr>
+  <tr><td><code>LED4</code></td><td><code>2'd3</code></td><td><code>4'b1000</code></td><td>收到 <code>step_tick</code> 后回到 LED1</td></tr>
+</table>
+
+<div class="teacher">
+  <p><strong>注意两个表示：</strong><code>led_on=4'b0001</code> 表示 LED1 亮；由于引脚低有效，外部端口
+  <code>led=~led_on=4'b1110</code>。如果波形中看到的是 <code>1110 → 1101 → 1011 → 0111</code>，这是正常的外部引脚电平。</p>
+</div>
+
+<h2>三、实战 A：自己写 RTL</h2>
+<p>练习目录定为 <code>test/case/05-water-led/</code>，沿用前几课的结构：</p>
+<pre><code>05-water-led/
+├── src/water_led.v
+├── sim/tb_water_led.sv
+├── sp1_prj/water_led.qpf
+├── sp1_prj/water_led.qsf
+├── sp1_prj/water_led.sdc
+├── doc/water-led.md
+└── Makefile</code></pre>
+
+<ol class="steps">
+  <li><strong>先写端口和参数。</strong>模块名必须是 <code>water_led</code>；端口是 <code>clk</code>、<code>rst_n</code>、<code>led[3:0]</code>；增加一个可覆盖的 <code>STEP_CNT_MAX</code> 参数。</li>
+  <li><strong>完成步进计数器。</strong>复位时清零；计数到 <code>STEP_CNT_MAX</code> 时清零。<code>step_tick</code> 用计数器比较得到，在阈值所在的一个周期内为 1。</li>
+  <li><strong>完成位置寄存器。</strong>复位后状态为 <code>LED1</code>；只有 <code>step_tick</code> 为 1 时才改变状态；<code>LED4</code> 后必须回到 <code>LED1</code>。</li>
+  <li><strong>完成组合译码。</strong>用 <code>case</code> 把状态映射为 <code>led_on</code>，写出 <code>default</code> 恢复路径，再用位取反得到低有效端口 <code>led</code>。</li>
+  <li><strong>自己检查边界。</strong>计数器使用“周期数减一”的阈值；状态改变和 <code>step_tick</code> 出现在哪一个时钟沿，要在波形中对齐确认。</li>
+</ol>
+
+<p>建议的代码骨架如下。它故意没有填入状态转移和计数条件，请你自己完成：</p>
+<pre><code>`timescale 1ns/1ps
+
+module water_led #(
+    parameter integer STEP_CNT_MAX = 25'd24_999_999
+) (
+    input  wire       clk,
+    input  wire       rst_n,
+    output wire [3:0] led
+);
+    localparam [1:0] LED1 = 2'd0;
+    localparam [1:0] LED2 = 2'd1;
+    localparam [1:0] LED3 = 2'd2;
+    localparam [1:0] LED4 = 2'd3;
+
+    reg [24:0] step_cnt;
+    wire       step_tick;
+    reg [1:0]  state;
+    reg [1:0]  next_state;
+    reg [3:0]  led_on;
+
+    assign step_tick = (step_cnt == STEP_CNT_MAX);
+
+    // 1. 时序：step_cnt
+    // 2. 时序：state
+    // 3. 组合：step_tick 与 next_state
+    // 4. 组合：led_on，最后 assign led = ~led_on;
+endmodule
+</code></pre>
+
+<h2>四、实战 B：先用小参数证明行为</h2>
+<p>仿真例化时把 <code>STEP_CNT_MAX</code> 改成一个很小的数，例如 3。这里的 3 表示计数范围
+  <code>0、1、2、3</code>，所以每 4 个时钟周期产生一次 <code>step_tick</code>。testbench 至少要覆盖：</p>
+<table>
+  <tr><th>场景</th><th>检查内容</th></tr>
+  <tr><td>复位期间</td><td><code>step_cnt=0</code>，状态为 LED1，外部 <code>led=4'b1110</code></td></tr>
+  <tr><td>没有到阈值</td><td>状态保持不动，<code>step_tick=0</code></td></tr>
+  <tr><td>第一次到阈值</td><td>只出现一个 <code>step_tick</code>，状态从 LED1 到 LED2</td></tr>
+  <tr><td>连续四步</td><td>外部端口依次为 <code>1110 → 1101 → 1011 → 0111 → 1110</code></td></tr>
+  <tr><td>非法状态</td><td>用和第 4 课相同的 <code>force/release</code> 方法，确认 <code>default</code> 回到 LED1</td></tr>
+</table>
+
+<p>testbench 可以继续复用第 4 课的两个小工具：</p>
+<pre><code>task automatic tick(input integer n);
+    repeat (n) @(posedge clk);
+endtask
+
+task automatic check(input integer condition, input [8*80-1:0] message);
+    if (condition)
+        $display("PASS: %0s", message);
+    else begin
+        $display("FAIL: %0s", message);
+        errors = errors + 1;
+    end
+endtask</code></pre>
+<p>每次在时钟沿后读取寄存器或输出时，使用 <code>#1</code> 给非阻塞赋值一个更新机会。
+  testbench 的结束条件仍然是：有错误调用 <code>$fatal</code>，全通过时打印 <code>TEST PASS</code>。</p>
+
+<h2>五、Makefile 与工程约束</h2>
+<p>复制第 4 课 Makefile 后，只需要系统地替换工程名：</p>
+<table>
+  <tr><th>第 4 课</th><th>第 5 课</th></tr>
+  <tr><td><code>04-key-fsm</code></td><td><code>05-water-led</code></td></tr>
+  <tr><td><code>key_fsm</code></td><td><code>water_led</code></td></tr>
+  <tr><td><code>tb_key_fsm</code></td><td><code>tb_water_led</code></td></tr>
+  <tr><td><code>key_fsm.vcd</code></td><td><code>water_led.vcd</code></td></tr>
+</table>
+<p>目标仍保持相同含义：<code>make sim</code> 编译并运行仿真，<code>make wave</code> 打开波形，
+  <code>make sof</code> 生成下载文件，<code>make timing</code> 单独检查时序，<code>make program</code> 只负责下载已有的 SOF。</p>
+
+<p>仿真通过后再创建 QSF。四个 LED 的文本约束如下，端口名必须和 RTL 逐字一致：</p>
+<pre><code>set_global_assignment -name FAMILY "Cyclone IV E"
+set_global_assignment -name DEVICE EP4CE10F17C8
+set_global_assignment -name TOP_LEVEL_ENTITY water_led
+set_global_assignment -name VERILOG_FILE ../src/water_led.v
+set_global_assignment -name SDC_FILE water_led.sdc
+
+set_location_assignment PIN_E1  -to clk
+set_location_assignment PIN_M15 -to rst_n
+set_location_assignment PIN_L7  -to led[0]
+set_location_assignment PIN_M6  -to led[1]
+set_location_assignment PIN_P3  -to led[2]
+set_location_assignment PIN_N3  -to led[3]</code></pre>
+
+<p><code>water_led.sdc</code> 先只需要约束板载时钟：</p>
+<pre><code>create_clock -name clk -period 20.000 [get_ports {clk}]
+derive_clock_uncertainty</code></pre>
+<p>下载前运行 <code>make sof</code>；烧录已经生成的文件运行 <code>make program</code>。
+  这两个目标是分开的，修改 RTL 后才需要重新编译 SOF。</p>
+
+<h2>六、进阶：用正弦 PWM 做亮度丝滑流水灯</h2>
+<p>基础流水灯只有“亮/灭”两种状态。本节把正弦值映射为 PWM 占空比，让每个 LED 的亮度缓慢变亮、变暗，
+  四个 LED 使用相差 90° 的相位，于是亮度波峰会从 LED1 平滑地移动到 LED4。</p>
+<pre><code>高速 PWM：   负责一帧内的亮度比例
+慢速 phase： 负责亮度包络的变化
+正弦查表：   把 phase 变成 duty（0..255）
+
+LED1:  sin(phase +   0)
+LED2:  sin(phase +  64)
+LED3:  sin(phase + 128)
+LED4:  sin(phase + 192)</code></pre>
+
+<h3>6.1 PWM 如何控制亮度</h3>
+<p>用一个 8 位自由运行计数器产生 PWM 载波：</p>
+<pre><code>pwm_cnt: 0, 1, 2, ... 254, 255, 0, ...
+led_on = (pwm_cnt &lt; duty)</code></pre>
+<p>当 <code>duty=64</code> 时，LED 在每个 PWM 周期内约四分之一时间点亮；
+  当 <code>duty=192</code> 时，约四分之三时间点亮。50MHz 时钟配合 8 位计数器的 PWM 频率约为
+  <code>50MHz / 256 = 195.3kHz</code>，肉眼不会看到闪烁。外部引脚低有效，因此最后仍然需要：</p>
+<pre><code>assign led[0] = ~led_on0;
+assign led[1] = ~led_on1;
+assign led[2] = ~led_on2;
+assign led[3] = ~led_on3;</code></pre>
+
+<h3>6.2 正弦值必须使用查表</h3>
+<p>testbench 可以调用数学库生成参考波形，但可综合 RTL 不应直接调用带实数的 <code>sin()</code>。
+  本课使用 ROM/LUT：离线把正弦曲线采样成无符号整数，RTL 根据 <code>phase</code> 读取表项。</p>
+<ul>
+  <li><strong>亮度范围：</strong>用 <code>0..255</code> 表示占空比，0 是全灭，255 接近全亮。</li>
+  <li><strong>采样数量：</strong>先用 16 或 32 个点验证功能，再增加到 256 个点降低阶梯感。</li>
+  <li><strong>实现方式：</strong>Quartus 13 可用 <code>case (phase)</code> 写小表，或用初始化文件推断 ROM；不要在硬件中使用浮点变量。</li>
+</ul>
+<p>如果先用 16 点查表，可以把 <code>phase</code> 的高 4 位作为索引；四个 LED 的相位偏移分别是
+  <code>0、4、8、12</code>。完成基本版本后再扩展到 256 点。</p>
+
+<h3>6.3 时序结构</h3>
+<p>建议保留三个独立职责：</p>
+<table>
+  <tr><th>电路</th><th>更新频率</th><th>职责</th></tr>
+  <tr><td><code>pwm_cnt</code></td><td>每个 <code>clk</code></td><td>生成 PWM 载波</td></tr>
+  <tr><td><code>phase_cnt</code></td><td>例如每 10ms</td><td>让亮度包络缓慢移动</td></tr>
+  <tr><td><code>phase</code></td><td><code>phase_tick</code> 到来时</td><td>读取正弦表的当前位置</td></tr>
+</table>
+<p>50MHz 下，若希望相位每 10ms 移动一次，<code>phase_cnt</code> 的阈值是
+  <code>500_000 - 1</code>。仿真时把它覆盖成 3 或 4。LED 的亮度波形周期约为
+  <code>256 × 10ms = 2.56s</code>。</p>
+
+<p>RTL 骨架可以写成下面这样，正弦表函数和复位分支由你补齐：</p>
+<pre><code>parameter integer PHASE_TICK_MAX = 500_000 - 1;
+reg [7:0]  pwm_cnt;
+reg [7:0]  phase;
+reg [31:0] phase_cnt;
+wire [7:0] duty0, duty1, duty2, duty3;
+
+assign duty0 = sine_lut(phase);
+assign duty1 = sine_lut(phase + 8'd64);
+assign duty2 = sine_lut(phase + 8'd128);
+assign duty3 = sine_lut(phase + 8'd192);
+
+assign led[0] = ~(pwm_cnt &lt; duty0);
+assign led[1] = ~(pwm_cnt &lt; duty1);
+assign led[2] = ~(pwm_cnt &lt; duty2);
+assign led[3] = ~(pwm_cnt &lt; duty3);
+
+always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+        pwm_cnt  &lt;= 8'd0;
+        phase_cnt &lt;= 32'd0;
+        phase    &lt;= 8'd0;
+    end else begin
+        pwm_cnt &lt;= pwm_cnt + 1'b1;
+        // phase_cnt 到 PHASE_TICK_MAX 时清零，并让 phase 加一
+    end
+end</code></pre>
+
+<p>下面这个函数可以直接放在模块内部，兼容传统 Verilog 写法。建议把它放在所有 <code>assign duty*</code> 语句之前。
+  它只存四分之一周期，完整正弦值由四象限对称性得到；返回值范围是 <code>0..255</code>，可以直接作为 8 位 PWM 的 duty。</p>
+<pre><code>function [7:0] sine_quarter_lut;
+    input [5:0] index;
+    begin
+        case (index)
+            6'd0: sine_quarter_lut = 8'd128;
+            6'd1: sine_quarter_lut = 8'd131;
+            6'd2: sine_quarter_lut = 8'd134;
+            6'd3: sine_quarter_lut = 8'd137;
+            6'd4: sine_quarter_lut = 8'd140;
+            6'd5: sine_quarter_lut = 8'd143;
+            6'd6: sine_quarter_lut = 8'd147;
+            6'd7: sine_quarter_lut = 8'd150;
+            6'd8: sine_quarter_lut = 8'd153;
+            6'd9: sine_quarter_lut = 8'd156;
+            6'd10: sine_quarter_lut = 8'd159;
+            6'd11: sine_quarter_lut = 8'd162;
+            6'd12: sine_quarter_lut = 8'd165;
+            6'd13: sine_quarter_lut = 8'd168;
+            6'd14: sine_quarter_lut = 8'd171;
+            6'd15: sine_quarter_lut = 8'd174;
+            6'd16: sine_quarter_lut = 8'd177;
+            6'd17: sine_quarter_lut = 8'd180;
+            6'd18: sine_quarter_lut = 8'd183;
+            6'd19: sine_quarter_lut = 8'd186;
+            6'd20: sine_quarter_lut = 8'd188;
+            6'd21: sine_quarter_lut = 8'd191;
+            6'd22: sine_quarter_lut = 8'd194;
+            6'd23: sine_quarter_lut = 8'd197;
+            6'd24: sine_quarter_lut = 8'd199;
+            6'd25: sine_quarter_lut = 8'd202;
+            6'd26: sine_quarter_lut = 8'd204;
+            6'd27: sine_quarter_lut = 8'd207;
+            6'd28: sine_quarter_lut = 8'd209;
+            6'd29: sine_quarter_lut = 8'd212;
+            6'd30: sine_quarter_lut = 8'd214;
+            6'd31: sine_quarter_lut = 8'd217;
+            6'd32: sine_quarter_lut = 8'd219;
+            6'd33: sine_quarter_lut = 8'd221;
+            6'd34: sine_quarter_lut = 8'd223;
+            6'd35: sine_quarter_lut = 8'd225;
+            6'd36: sine_quarter_lut = 8'd227;
+            6'd37: sine_quarter_lut = 8'd229;
+            6'd38: sine_quarter_lut = 8'd231;
+            6'd39: sine_quarter_lut = 8'd233;
+            6'd40: sine_quarter_lut = 8'd235;
+            6'd41: sine_quarter_lut = 8'd236;
+            6'd42: sine_quarter_lut = 8'd238;
+            6'd43: sine_quarter_lut = 8'd239;
+            6'd44: sine_quarter_lut = 8'd241;
+            6'd45: sine_quarter_lut = 8'd242;
+            6'd46: sine_quarter_lut = 8'd244;
+            6'd47: sine_quarter_lut = 8'd245;
+            6'd48: sine_quarter_lut = 8'd246;
+            6'd49: sine_quarter_lut = 8'd247;
+            6'd50: sine_quarter_lut = 8'd248;
+            6'd51: sine_quarter_lut = 8'd249;
+            6'd52: sine_quarter_lut = 8'd250;
+            6'd53: sine_quarter_lut = 8'd251;
+            6'd54: sine_quarter_lut = 8'd252;
+            6'd55: sine_quarter_lut = 8'd252;
+            6'd56: sine_quarter_lut = 8'd253;
+            6'd57: sine_quarter_lut = 8'd254;
+            6'd58: sine_quarter_lut = 8'd254;
+            6'd59: sine_quarter_lut = 8'd254;
+            6'd60: sine_quarter_lut = 8'd255;
+            6'd61: sine_quarter_lut = 8'd255;
+            6'd62: sine_quarter_lut = 8'd255;
+            6'd63: sine_quarter_lut = 8'd255;
+            default: sine_quarter_lut = 8'd128;
+        endcase
+    end
+endfunction
+
+function [7:0] sine_lut;
+    input [7:0] phase;
+    reg [5:0] index;
+    begin
+        case (phase[7:6])
+            2'b00: begin
+                index = phase[5:0];
+                sine_lut = sine_quarter_lut(index);
+            end
+            2'b01: begin
+                index = ~phase[5:0];
+                sine_lut = sine_quarter_lut(index);
+            end
+            2'b10: begin
+                index = phase[5:0];
+                sine_lut = 8'd255 - sine_quarter_lut(index);
+            end
+            2'b11: begin
+                index = ~phase[5:0];
+                sine_lut = 8'd255 - sine_quarter_lut(index);
+            end
+            default: sine_lut = 8'd128;
+        endcase
+    end
+endfunction</code></pre>
+<p>在四个 LED 上使用四分之一周期相移：</p>
+<pre><code>assign duty0 = sine_lut(phase);
+assign duty1 = sine_lut(phase + 8'd64);
+assign duty2 = sine_lut(phase + 8'd128);
+assign duty3 = sine_lut(phase + 8'd192);</code></pre>
+<p>表中使用整数近似，个别象限边界可能相差 1 个计数值，不会影响肉眼看到的亮度平滑性。</p>
+
+<h3>6.4 把 LUT 放进单独的 .v 文件</h3>
+<p>函数只能在模块内部使用，不能把一个只含函数的文件直接“调用”。将函数放入模块后，主模块通过模块实例连接它的输入和输出。
+  本工程的 <code>src/sine_quarter_lut.v</code> 定义了模块 <code>sine_lut</code>：</p>
+<pre><code>module sine_lut (
+    input  wire [7:0] phase,
+    output wire [7:0] duty
+);
+    // sine_quarter_lut、sine_value 两个 function 放在这里
+    assign duty = sine_value(phase);
+endmodule</code></pre>
+<p>所以 <code>sine_quarter_lut</code> 是模块内部的“四分之一周期函数”，<code>sine_value</code> 是完整相位到 duty 的转换函数，
+  <code>duty</code> 才是模块对外输出的亮度数值。<code>water_led.v</code> 里这样实例化：</p>
+<pre><code>wire [7:0] duty0;
+
+sine_lut sine_lut_0 (
+    .phase(phase),
+    .duty(duty0)
+);</code></pre>
+<p>实例化语法是“模块名 + 实例名 + 端口连接”。一个模块可以实例化多次；本工程实例化四次，分别给 phase 加上
+  <code>0、64、128、192</code> 的相位偏移。文件名不要求和模块名一致，但 Makefile 和 QSF 必须把这个源文件列入工程：</p>
+<pre><code># Makefile
+$(MSBIN)/vlog -quiet ../src/sine_quarter_lut.v ../src/water_led.v tb_water_led.sv
+
+# water_led.qsf
+set_global_assignment -name VERILOG_FILE ../src/sine_quarter_lut.v</code></pre>
+<p>ModelSim 的 <code>vlog</code> 需要看到两个源文件，Quartus 的 QSF 也需要登记两个源文件；否则主模块会报
+  <code>Unknown module: sine_lut</code> 或找不到模块定义。</p>
+
+<h3>6.5 仿真应该检查什么</h3>
+<p>PWM 输出不能只在一个时刻采样，因为一个亮度周期内它会快速翻转。testbench 应在一个完整 PWM 帧内统计
+  <code>~led[i]</code> 为 1 的时钟数，再和当前 <code>duty_i</code> 比较：</p>
+<table>
+  <tr><th>检查</th><th>预期</th></tr>
+  <tr><td>PWM 载波</td><td><code>pwm_cnt</code> 连续循环，周期为 256 个时钟</td></tr>
+  <tr><td>占空比</td><td>亮的时钟数随 <code>duty_i</code> 增加而增加</td></tr>
+  <tr><td>相位关系</td><td>四个 duty 值相差约四分之一周期</td></tr>
+  <tr><td>亮度包络</td><td><code>phase</code> 缓慢循环，duty 先增大后减小</td></tr>
+</table>
+<p>仿真时可以先把 <code>PHASE_TICK_MAX</code> 覆盖为 3，让亮度包络很快变化；
+  PWM 仍保持 8 位，这样正弦表的 <code>0..255</code> 占空比范围不需要改变。若同时降低 PWM 位宽，
+  必须把查表输出范围同步改成 <code>0..(2^PWM_BITS-1)</code>。上板时恢复实际的相位分频值。</p>
+
+<h3>6.6 进阶验收</h3>
+<ol>
+  <li>四个 LED 的外部电平仍然经过低有效取反，但亮的时间比例随 duty 平滑变化。</li>
+  <li>在同一 PWM 帧内 duty 保持稳定，只有慢速 <code>phase_tick</code> 到来时才变化。</li>
+  <li>四个 LED 的亮度峰值按 LED1、LED2、LED3、LED4 的顺序移动，没有突然跳亮或全灭。</li>
+  <li>使用小参数仿真通过后，再把 PWM 和相位计数器恢复为 50MHz 的实际值上板。</li>
+</ol>
+
+<h2>七、常见错误与排查顺序</h2>
+<ol>
+  <li><strong>LED 全灭或全亮：</strong>先看是否忘了低有效取反，再确认 QSF 的位序和物理 LED 编号。</li>
+  <li><strong>LED 亮度不变：</strong>检查是否把 duty 直接接成常数，或 phase 计数器是否没有产生慢速更新。</li>
+  <li><strong>LED 移动太快：</strong>检查仿真参数是否只写在 testbench 例化处；上板默认值应仍然对应设计的 PWM 和相位周期。</li>
+  <li><strong>每次移动跳过一个 LED：</strong>检查状态寄存器是否在没有 <code>step_tick</code> 时也更新，或是否把组合信号误当成时钟。</li>
+  <li><strong>波形出现 <code>X</code>：</strong>检查复位是否覆盖了计数器、脉冲、状态和输出的初值。</li>
+  <li><strong>Quartus 找不到端口：</strong>逐字核对 <code>led[0]</code> 这种总线索引，QSF 中不能写成不存在的单独端口名。</li>
+</ol>
+
+<h2>八、检索练习</h2>
+<div class="quiz" data-answer="1">
+  <p class="q">1. 为什么本课生成 <code>step_tick</code>，而不是把计数器输出直接当新时钟？</p>
+  <button>这样可以让时钟频率自动变成 0Hz</button>
+  <button>保持一个时钟域，避免额外时钟带来的时序和约束问题</button>
+  <button>因为计数器不能连接到触发器</button>
+  <div class="explain">使能脉冲让状态寄存器仍由原来的 clk 驱动，设计更容易约束、分析和复用。</div>
+</div>
+<div class="quiz" data-answer="2">
+  <p class="q">2. 低有效 LED 中，内部 <code>led_on=4'b0001</code> 时，外部端口应是什么值？</p>
+  <button><code>4'b0001</code></button>
+  <button><code>4'b0000</code></button>
+  <button><code>4'b1110</code></button>
+  <div class="explain">内部使用亮为 1 的逻辑表示，连接到低有效引脚时逐位取反，所以 LED1 亮时外部值为 1110。</div>
+</div>
+<div class="quiz" data-answer="0">
+  <p class="q">3. <code>STEP_CNT_MAX=3</code> 时，计数器从 0 开始多久产生一次步进？</p>
+  <button>4 个时钟周期</button>
+  <button>3 个时钟周期</button>
+  <button>只在复位时产生一次</button>
+  <div class="explain">计数序列是 0、1、2、3，数到最大值后清零并产生单拍使能，因此周期数是 STEP_CNT_MAX+1。</div>
+</div>
+
+<h2>九、通关标准</h2>
+<ol>
+  <li>仿真输出连续通过，外部 LED 电平按 <code>1110 → 1101 → 1011 → 0111 → 1110</code> 循环。</li>
+  <li>波形能指出 <code>step_tick</code>、计数器、状态和 <code>led</code> 之间的因果关系。</li>
+  <li>Quartus Map、Fit、Assembler 和单独的 Timing 都能从命令行完成。</li>
+  <li>上板后 LED1、LED2、LED3、LED4 依次点亮，移动周期约为 0.5 秒。</li>
+  <li>能解释为什么“计数器是时间基准，状态寄存器是位置记忆，组合逻辑是输出译码”。</li>
+  <li>进阶完成后，能解释 <code>pwm_cnt</code> 控制载波、<code>phase</code> 控制亮度包络，以及低有效输出为什么要取反。</li>
+</ol>
+
+<p>现在先完成“实战 A”的 RTL 和状态表。遇到语法错误、计数边界或波形不符合预期时，把当前文件和 <code>make sim</code> 输出贴出来，我们逐个定位。</p>
+
+<h2 id="ref">十、本课资源</h2>
+<ul>
+  <li><strong>官方对照：</strong><code>firebbs_doc/2-野火开源图书合集（源代码以及文档）/征途Pro/12_water_led/</code>，先自己完成，再对照官方实现的结构差异。</li>
+  <li><strong>进阶方向：</strong>正弦 PWM 亮度流水灯；后续可把查表 ROM 替换为更高精度的 ROM 或 CORDIC。</li>
+  <li><strong>板卡资料：</strong><code>firebbs_doc/1-开发板原理图_封装库_尺寸图_硬件手册/征途引脚绑定映射表.xlsx</code>。</li>
+</ul>
+
+<div class="teacher">
+  <p><strong>随时问我：</strong>如果你不确定状态编码、低有效位序、计数器边界或 QSF 总线写法，贴出你的版本，我会先指出问题和原因，让你自己完成修改。</p>
+</div>
+
+<nav class="lesson-nav">
+  <a href="../index.html">← 课程总览</a>
+  <a href="0004-fsm.html">← 上一篇：第 4 课 · 状态机 FSM</a>
+</nav>
+
+<script>
+document.querySelectorAll('.quiz').forEach(function (quiz) {
+  var answer = parseInt(quiz.dataset.answer, 10);
+  var buttons = quiz.querySelectorAll('button');
+  var done = false;
+  buttons.forEach(function (btn, i) {
+    btn.addEventListener('click', function () {
+      if (done) return;
+      done = true;
+      btn.classList.add(i === answer ? 'correct' : 'wrong');
+      if (i !== answer) buttons[answer].classList.add('correct');
+      quiz.querySelector('.explain').classList.add('show');
+    });
+  });
+});
+</script>
+</body>
+</html>
