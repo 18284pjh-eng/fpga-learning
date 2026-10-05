@@ -1,4 +1,4 @@
-`timescale 1ns/1ns
+`timescale 1ns/1ps
 
 module key_fsm #(
    parameter CNT_MAX = 20'd1000_000 - 1,
