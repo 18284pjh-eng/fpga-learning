@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 6 课 · 无源蜂鸣器：频率分频与简单旋律</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<h1>第 6 课 · 无源蜂鸣器：频率分频与简单旋律</h1>
+<p class="meta">
+  对应教材：<a href="#ref">《FPGA Verilog 开发实战指南》第 24 章「无源蜂鸣器驱动实验」</a> ·
+  平台：野火征途 Pro · 预计 100–150 分钟 ·
+  上一篇：<a href="0005-water-led.html">第 5 课 · 正弦 PWM 流水灯</a>
+</p>
+
+<blockquote>
+  <p><strong>本课的胜利：</strong>用 50MHz 时钟分频得到人耳能听到的方波，让无源蜂鸣器发出一个音符；
+  再增加音符时长计数器，按表播放一段简单旋律。你会看到“频率”和“持续时间”是两个独立的时间尺度。</p>
+</blockquote>
+
+<h2>〇、开场复习</h2>
+<ol>
+  <li>第 5 课中，<code>pwm_cnt</code> 的循环速度决定什么？<code>phase</code> 的更新速度决定什么？</li>
+  <li>若一个信号每 1us 翻转一次，它的完整周期是 1us 还是 2us？频率是多少？</li>
+  <li>为什么蜂鸣器输出需要寄存器保存，而不是在 testbench 里使用 <code>#</code> 延时生成？</li>
+</ol>
+
+<div class="teacher">
+  <p><strong>本课的关键：</strong>计数器本身没有“频率”这个属性，计数到阈值后翻转输出，才形成周期信号。
+  输出每半个周期翻转一次，所以分频公式里有一个 2。</p>
+</div>
+
+<h2>一、先确认蜂鸣器类型和引脚</h2>
+<p>征途 Pro 使用的是<strong>无源蜂鸣器</strong>。无源蜂鸣器不会自己产生固定音调，需要 FPGA 送入方波。
+  本课使用的引脚约束是：</p>
+<table>
+  <tr><th>端口</th><th>引脚</th><th>说明</th></tr>
+  <tr><td><code>clk</code></td><td><code>PIN_E1</code></td><td>50MHz 板载时钟</td></tr>
+  <tr><td><code>rst_n</code></td><td><code>PIN_M15</code></td><td>低有效复位</td></tr>
+  <tr><td><code>key</code></td><td><code>PIN_M2</code></td><td>KEY1，按下为 0，用来控制播放</td></tr>
+  <tr><td><code>beep</code></td><td><code>PIN_J11</code></td><td>无源蜂鸣器控制信号</td></tr>
+</table>
+<p>LED 的低有效规则不能套到蜂鸣器上。蜂鸣器信号的极性以原理图和实测为准；本课 RTL 先生成普通 0/1 方波，
+  不对它额外取反。</p>
+
+<h2>二、一个音符如何从时钟中产生</h2>
+<p>以标准音符 A4 为例，目标频率约为 440Hz。50MHz 时钟周期为 20ns，方波每半周期翻转一次：</p>
+<pre><code>半周期计数值 = 50,000,000 / (2 × 440) - 1
+              ≈ 56,817
+
+每数到 56,817，beep 翻转一次
+完整周期约为 113,636 个 clk
+输出频率约为 440Hz</code></pre>
+<p>计数范围是 <code>0..56,817</code>，一共 56,818 个时钟。因此阈值写成“计算结果减一”，和前面流水灯的边界规则相同。</p>
+
+<h3>2.1 当前实现：状态寄存器加分频译码</h3>
+<p>当前工程采用你已经练习过的结构：<code>melody_fsm</code> 是音符状态寄存器，
+  <code>duration_cnt</code> 到期时切换状态，组合 <code>case (melody_fsm)</code> 选择当前音符的分频值。
+  <code>key=0</code> 时播放，<code>key=1</code> 时停止并回到 A4。</p>
+<pre><code>// A-G 状态：A4 -> B4 -> C5 -> D5 -> E5 -> F5 -> G5 -> A4
+reg [2:0] melody_fsm;
+
+always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+        duration_cnt &lt;= 30'd0;
+        melody_fsm   &lt;= NOTE_A;
+    end else if (key) begin
+        duration_cnt &lt;= 30'd0;
+        melody_fsm   &lt;= NOTE_A;
+    end else if (duration_cnt == DURATION_CNT_MAX - 1) begin
+        duration_cnt &lt;= 30'd0;
+        if (melody_fsm == NOTE_G)
+            melody_fsm &lt;= NOTE_A;
+        else
+            melody_fsm &lt;= melody_fsm + 3'd1;
+    end else begin
+        duration_cnt &lt;= duration_cnt + 30'd1;
+    end
+end
+
+always @(*) begin
+    case (melody_fsm)
+        NOTE_A: tone_cnt_max = TONE_A;
+        NOTE_B: tone_cnt_max = TONE_B;
+        NOTE_C: tone_cnt_max = TONE_C;
+        NOTE_D: tone_cnt_max = TONE_D;
+        NOTE_E: tone_cnt_max = TONE_E;
+        NOTE_F: tone_cnt_max = TONE_F;
+        NOTE_G: tone_cnt_max = TONE_G;
+        default: tone_cnt_max = TONE_A;
+    endcase
+end</code></pre>
+<p>这里的 <code>melody_fsm</code> 是当前状态，不需要另写 <code>next_state</code>；
+  它在时序块中按持续时间递增，在组合块中只负责译码。状态切换时同时清零 <code>tone_cnt</code>，
+  避免新音符从旧音符的半周期中间开始。</p>
+
+<h3>2.2 先用缩短参数验证</h3>
+<p>真实的音符持续时间很长，仿真时通过参数覆盖把每个音符压缩到少量时钟：</p>
+<pre><code>beep #(
+    .DURATION_CNT_MAX(8)
+) dut (...);</code></pre>
+<p>testbench 还可以临时 <code>force dut.tone_cnt_max = 17'd2</code>，快速观察方波翻转。
+  这种修改只用于仿真，不应写入综合用的 RTL。</p>
+<table>
+  <tr><th>场景</th><th>检查</th></tr>
+  <tr><td>复位期间</td><td><code>beep=0</code>，计数器为 0</td></tr>
+  <tr><td>未使能</td><td>输出保持 0，计数器不会累积</td></tr>
+  <tr><td>使能后</td><td>输出每 4 个时钟翻转一次</td></tr>
+  <tr><td>关闭使能</td><td>输出立即在下一个时钟回到 0，并重新开始计数</td></tr>
+</table>
+
+<h2>三、从单音扩展到旋律</h2>
+<p>字母音名和唱名的对应关系是 <code>C=DO</code>、<code>D=RE</code>、<code>E=MI</code>、
+  <code>F=FA</code>、<code>G=SO</code>、<code>A=LA</code>、<code>B=SI</code>。
+  因此本课按字母顺序播放 <code>A→B→C→D→E→F→G</code>，也就是
+  <code>LA→SI→DO→RE→MI→FA→SO</code>。</p>
+<p>音调频率和音符持续时间属于两套计数器：</p>
+<table>
+  <tr><th>计数器</th><th>作用</th><th>典型数量</th></tr>
+  <tr><td><code>tone_cnt</code></td><td>产生当前音符的高低电平翻转</td><td>几十万以内</td></tr>
+  <tr><td><code>duration_cnt</code></td><td>决定当前音符播放多久</td><td>数百万到数千万</td></tr>
+</table>
+<p>当前七个音符使用以下近似频率和半周期计数值：</p>
+<pre><code>note_div   = 当前音符的半周期分频值
+note_ticks = 当前音符持续的时钟数
+
+ A4: 56,818  // 440Hz
+ B4: 50,618  // 494Hz
+ C5: 47,777  // 523Hz
+ D5: 42,565  // 587Hz
+ E5: 37,921  // 659Hz
+ F5: 35,792  // 698Hz
+ G5: 31,887  // 784Hz</code></pre>
+<p>当 <code>duration_cnt</code> 到达当前音符的持续阈值时，<code>melody_fsm</code> 加一，
+  <code>tone_cnt</code> 清零，重新按新的 <code>tone_cnt_max</code> 产生方波。</p>
+
+<h3>3.1 推荐的旋律控制结构</h3>
+<ol class="steps">
+  <li><strong>音符状态寄存器。</strong>使用 <code>melody_fsm[2:0]</code> 表示 A 到 G，复位后指向 A。</li>
+  <li><strong>音符分频译码。</strong>用 <code>case (melody_fsm)</code> 输出 <code>tone_cnt_max</code>，不引入浮点。</li>
+  <li><strong>音符时长计数。</strong>使用 <code>DURATION_CNT_MAX</code> 把每个音符的仿真时长压小。</li>
+  <li><strong>音符切换。</strong>时长到达时状态循环，<code>tone_cnt</code> 和 <code>beep</code> 在边界清零。</li>
+  <li><strong>按键控制。</strong>KEY1 按下时播放，松开时停止；输入按键沿用第 3 课的同步和消抖思想。</li>
+</ol>
+
+<div class="teacher">
+  <p><strong>先后顺序：</strong>先完成单音，再加入音符索引，最后再接按键。一次同时改频率、时长、按键和消抖，
+  波形出了问题时很难定位。</p>
+</div>
+
+<h2>四、命令行工程</h2>
+<p>新练习目录为 <code>test/case/06-beep/</code>：</p>
+<pre><code>06-beep/
+├── src/beep.v
+├── sim/tb_beep.sv
+├── sp1_prj/beep.qpf
+├── sp1_prj/beep.qsf
+├── sp1_prj/beep.sdc
+└── Makefile</code></pre>
+<p>Makefile 继续沿用第 5 课的入口：</p>
+<pre><code>make sim       # 编译并运行文本检查
+make syntax    # 只编译 RTL 和 testbench，不运行仿真时间
+make syntax-rtl # 只检查 RTL 源文件
+make syntax-tb  # 只检查 testbench 源文件
+make elab      # 装载顶层，检查端口/参数/模块连接，不运行时间
+make wave      # 观察 tone_cnt、duration_cnt、melody_fsm、beep
+make map       # Analysis &amp; Synthesis
+make fit       # Fitter
+make sof       # 生成可下载文件
+make timing    # 单独运行 TimeQuest
+make program   # 只下载已有 SOF</code></pre>
+<p>当前工程只有一个 RTL 文件，ModelSim 的 <code>vlog</code> 需要同时编译它和 testbench：</p>
+<pre><code>$(MSBIN)/vlog -quiet \
+    ../src/beep.v tb_beep.sv</code></pre>
+<p><code>vlog</code> 是编译器：它会检查语法和编译期错误，但不会执行 <code>initial</code>、不会推进仿真时间。
+  <code>vsim</code> 才负责装载设计并运行仿真。<code>make syntax</code> 适合只检查代码能否编译；
+  <code>make elab</code> 再多做一步顶层装载，能够发现模块不存在、端口不匹配、参数名写错等问题，
+  但同样不会播放波形或执行测试过程。</p>
+<p>QSF 也必须登记每个源文件：</p>
+<pre><code>set_global_assignment -name TOP_LEVEL_ENTITY beep
+set_global_assignment -name VERILOG_FILE ../src/beep.v
+set_global_assignment -name SDC_FILE beep.sdc
+
+set_location_assignment PIN_E1  -to clk
+set_location_assignment PIN_M15 -to rst_n
+set_location_assignment PIN_M2  -to key
+set_location_assignment PIN_J11 -to beep</code></pre>
+
+<h2>五、仿真验收</h2>
+<p>testbench 不需要“听声音”，它检查数字波形的周期和切换边界：</p>
+<ol>
+  <li>复位后 <code>beep=0</code>，所有计数器处于已知值。</li>
+  <li>播放状态下，统计若干个周期，确认相邻翻转间隔等于当前 <code>tone_cnt_max</code> 个时钟。</li>
+  <li>关闭使能后，确认输出停止且音调计数器清零。</li>
+  <li>旋律模式下，确认 <code>melody_fsm</code> 按 A-G 顺序循环，切换音符时 <code>tone_cnt</code> 重新开始。</li>
+  <li>使用 <code>$fatal</code> 让失败的检查返回非零状态，保证 <code>make sim</code> 能识别错误。</li>
+</ol>
+
+<h2>六、常见错误</h2>
+<ol>
+  <li><strong>声音比预期高一个八度：</strong>把半周期分频值误当成完整周期，或忘记方波每半周期翻转一次。</li>
+  <li><strong>按键松开后仍有残音：</strong>禁用时没有清零 <code>tone_cnt</code> 和 <code>beep</code>。</li>
+  <li><strong>音符切换时出现异常长脉冲：</strong>切换 <code>tone_cnt_max</code> 时没有清零 <code>tone_cnt</code>。</li>
+  <li><strong>仿真等太久：</strong>没有通过参数覆盖把音调和音符时长压小。</li>
+  <li><strong>Quartus 找不到顶层：</strong>QSF 的顶层实体、RTL 文件名或相对路径写错。</li>
+</ol>
+
+<h2>七、通关标准</h2>
+<ol>
+  <li>仿真能证明单音输出周期正确，启停行为确定。</li>
+  <li>上板按下 KEY1 后蜂鸣器发声，松开后停止。</li>
+  <li>旋律模式完成 A 到 G 的七个音符循环。</li>
+  <li>能解释：音调分频计数器和音符时长计数器为什么必须分开。</li>
+</ol>
+
+<h2 id="ref">八、本课资源</h2>
+<ul>
+  <li><strong>官方对照：</strong><code>firebbs_doc/2-野火开源图书合集（源代码以及文档）/征途Pro/15_beep/</code>。</li>
+  <li><strong>引脚资料：</strong>无源蜂鸣器 <code>PIN_J11</code>，时钟 <code>PIN_E1</code>，复位 <code>PIN_M15</code>，KEY1 <code>PIN_M2</code>。</li>
+  <li><strong>前置知识：</strong><a href="0005-water-led.html">第 5 课</a>中的 PWM、计数器和命令行仿真流程。</li>
+</ul>
+
+<div class="teacher">
+  <p><strong>本课完成标志：</strong>第六课工程已经用 <code>melody_fsm</code> 完成 A-G 循环，
+  通过 <code>make syntax</code>、<code>make elab</code>、<code>make sim</code>，并通过 Quartus 的 Analysis &amp; Synthesis。
+  下一课将把 74HC595 串行移位和六位数码管静态显示接入命令行工程。</p>
+</div>
+
+<nav class="lesson-nav">
+  <a href="../index.html">← 课程总览</a>
+  <a href="0005-water-led.html">← 上一篇：第 5 课 · 正弦 PWM 流水灯</a>
+</nav>
+
+</body>
+</html>

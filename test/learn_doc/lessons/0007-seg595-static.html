@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 7 课 · 六位数码管静态显示：74HC595 串行移位</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<h1>第 7 课 · 六位数码管静态显示：74HC595 串行移位</h1>
+<p class="meta">
+  对应教材：<a href="#ref">《FPGA Verilog 开发实战指南》第 25 章「数码管的静态显示」</a> ·
+  平台：野火征途 Pro · 预计 120–180 分钟 ·
+  上一篇：<a href="0006-beep.html">第 6 课 · 无源蜂鸣器</a>
+</p>
+
+<blockquote>
+  <p><strong>本课的胜利：</strong>用 FPGA 产生 74HC595 所需的串行数据、移位时钟和锁存时钟，
+  在六位数码管上稳定显示一组数字。你会把一个并行的 14 位显示数据包，按位发送给串行芯片。</p>
+</blockquote>
+
+<h2>〇、开场复习</h2>
+<ol>
+  <li>第 6 课中，音调计数器和音符时长计数器为什么不能合并？</li>
+  <li>为什么 50MHz 时钟不能直接接到数码管的串行移位时钟？</li>
+  <li>如果一个寄存器在时钟沿更新，另一个输出组合逻辑读取它，读取到的是更新前还是更新后的值？</li>
+</ol>
+
+<div class="teacher">
+  <p><strong>本课的关键：</strong>74HC595 先把数据逐位移入内部移位寄存器，
+  再用锁存时钟把完整数据一次性送到输出寄存器。移位过程中，外部数码管不会看到半包数据。</p>
+</div>
+
+<h2>一、确认硬件接口</h2>
+<p>征途 Pro 使用 74HC595 扩展数码管输出。FPGA 只需要控制四条信号：</p>
+<table>
+  <tr><th>端口</th><th>引脚</th><th>作用</th></tr>
+  <tr><td><code>clk</code></td><td><code>PIN_E1</code></td><td>50MHz 板载时钟</td></tr>
+  <tr><td><code>rst_n</code></td><td><code>PIN_M15</code></td><td>低有效复位</td></tr>
+  <tr><td><code>ds</code></td><td><code>PIN_R1</code></td><td>串行数据输入</td></tr>
+  <tr><td><code>shcp</code></td><td><code>PIN_B1</code></td><td>移位时钟</td></tr>
+  <tr><td><code>stcp</code></td><td><code>PIN_K9</code></td><td>锁存时钟</td></tr>
+  <tr><td><code>oe</code></td><td><code>PIN_L11</code></td><td>输出使能，低有效</td></tr>
+</table>
+<p>本课先显示固定的 <code>012345</code> 或 <code>123456</code>，暂时不加入按键和动态数据。
+  先把 74HC595 的时序独立验证清楚，后面再把蜂鸣器的状态或计数值接到显示模块。</p>
+
+<h2>二、14 位数据包是什么</h2>
+<p>六位数码管需要两类并行信息：</p>
+<table>
+  <tr><th>字段</th><th>位宽</th><th>含义</th></tr>
+  <tr><td><code>sel</code></td><td>6 位</td><td>六个数码管的位选</td></tr>
+  <tr><td><code>seg</code></td><td>8 位</td><td>a、b、c、d、e、f、g、dp 段选</td></tr>
+</table>
+<p>合计 <code>6+8=14</code> 位。官方控制器把它们拼成一个移位数据包：</p>
+<pre><code>data = {seg[0], seg[1], seg[2], seg[3],
+        seg[4], seg[5], seg[6], seg[7],
+        sel[5], sel[4], sel[3], sel[2], sel[1], sel[0]};</code></pre>
+<p>这个拼接顺序必须和硬件连线、<code>ds</code> 取位顺序一起验证。不要只根据变量名猜位序，
+  要在仿真中观察每次 <code>shcp</code> 上升沿前后的 <code>ds</code>，确认发送的是预期序列。</p>
+
+<h2>三、三个时序信号的关系</h2>
+<p>发送一个 14 位数据包时，基本时序如下：</p>
+<ol class="steps">
+  <li>在 <code>shcp</code> 上升沿到来前，把当前数据位放到 <code>ds</code>。</li>
+  <li>产生一次 <code>shcp</code> 上升沿，74HC595 采样并移入这一位。</li>
+  <li>重复 14 次，直到整包数据进入移位寄存器。</li>
+  <li>发送完成后给 <code>stcp</code> 一个脉冲，把移位寄存器内容锁存到输出寄存器。</li>
+  <li><code>oe=0</code> 时允许输出；复位或需要避免半包显示时，可以暂时关闭输出。</li>
+</ol>
+<p>因此 <code>shcp</code> 和 <code>stcp</code> 不是同一个信号：</p>
+<table>
+  <tr><th>信号</th><th>作用</th><th>频率/时机</th></tr>
+  <tr><td><code>shcp</code></td><td>每一位数据移入一次</td><td>每包 14 个脉冲</td></tr>
+  <tr><td><code>stcp</code></td><td>整包数据更新到输出</td><td>每包 1 个脉冲</td></tr>
+  <tr><td><code>oe</code></td><td>控制输出是否可见</td><td>低有效电平</td></tr>
+</table>
+
+<h2>四、推荐的 RTL 分层</h2>
+<p>本课建议把设计拆成三个模块，顶层只负责连接：</p>
+<pre><code>07-seg595-static/
+├── src/seg595_static.v   # 顶层：连接显示译码和 595 控制器
+├── src/seg_display.v     # 数字到段码、位选数据
+├── src/hc595_ctrl.v      # 14 位串行发送和锁存
+├── sim/tb_seg595_static.sv
+├── sp1_prj/seg595_static.qpf
+├── sp1_prj/seg595_static.qsf
+├── sp1_prj/seg595_static.sdc
+└── Makefile</code></pre>
+<p><code>seg_display</code> 只负责“显示什么”，<code>hc595_ctrl</code> 只负责“怎么发送”。
+  这种划分让段码错误和移位时序错误可以分别定位。</p>
+
+<h3>4.1 先完成移位控制器</h3>
+<p>可以先使用很小的分频参数进行仿真。控制器至少需要：</p>
+<pre><code>reg [1:0]  clk_div;
+reg [3:0]  bit_cnt;       // 0..13
+reg [13:0] shift_data;
+reg        busy;
+
+// 验收重点：
+// 1. 一次发送恰好 14 个 shcp 脉冲
+// 2. 每个 shcp 上升沿前 ds 已经稳定
+// 3. 第 14 位发送完成后只产生一个 stcp 脉冲
+// 4. 非发送期间输出保持确定状态</code></pre>
+<p>第一版可以让控制器持续重复发送同一个数据包。等重复发送时序正确后，再增加“数据变化才发送”或更新请求握手。</p>
+
+<h3>4.2 段码译码</h3>
+<p>常见共阳数码管段码是低有效。例如数字 <code>0</code> 点亮 a、b、c、d、e、f，关闭 g：</p>
+<pre><code>case (digit)
+    4'd0: seg = 8'b1100_0000;
+    4'd1: seg = 8'b1111_1001;
+    4'd2: seg = 8'b1010_0100;
+    4'd3: seg = 8'b1011_0000;
+    default: seg = 8'b1111_1111;
+endcase</code></pre>
+<p>具体极性以本板实测和官方例程为准。<code>1111_1111</code> 通常表示全灭，
+  但位选 <code>sel</code> 的有效电平也必须一起确认。</p>
+
+<h2>五、命令行工程与仿真</h2>
+<p>本课继续使用 Makefile：</p>
+<pre><code>make syntax      # 只编译 RTL 和 testbench
+make elab        # 检查顶层模块连接
+make sim         # 运行自动检查
+make wave        # 查看 ds、shcp、stcp、oe、bit_cnt
+make map         # Quartus Analysis &amp; Synthesis
+make fit         # Fitter
+make sof         # 生成 SOF
+make program     # 下载已有 SOF</code></pre>
+<p>testbench 不需要“看见数字”，而是检查数字显示背后的协议：</p>
+<ol>
+  <li>复位后 <code>oe</code>、<code>ds</code>、<code>shcp</code>、<code>stcp</code> 处于确定状态。</li>
+  <li>每一帧出现恰好 14 个 <code>shcp</code> 上升沿。</li>
+  <li>每个 <code>shcp</code> 上升沿采样到的 <code>ds</code> 位序与预期数据包一致。</li>
+  <li>第 14 个移位时钟后出现一个 <code>stcp</code> 脉冲。</li>
+  <li>连续观察两帧，确认帧间没有少位、多位或锁存脉冲重复。</li>
+</ol>
+
+<h2>六、常见错误</h2>
+<ol>
+  <li><strong>数码管显示乱码：</strong>段码极性、位序或 <code>data</code> 拼接顺序错误。</li>
+  <li><strong>只有最后一位数据正确：</strong>误把串行移位寄存器当成并行输出，或没有产生 <code>stcp</code> 锁存脉冲。</li>
+  <li><strong>显示闪烁或半包更新：</strong>在移位过程中没有正确使用 <code>oe</code>，或锁存时机提前。</li>
+  <li><strong>仿真计数不稳定：</strong>testbench 在错误的边沿采样 <code>ds</code>，应明确发送器和采样器的边沿关系。</li>
+  <li><strong>Quartus 找不到模块：</strong>Makefile 或 QSF 漏列了 <code>seg_display.v</code>、<code>hc595_ctrl.v</code>。</li>
+</ol>
+
+<h2>七、通关标准</h2>
+<ol>
+  <li>RTL 和 testbench 通过 <code>make syntax</code> 与 <code>make elab</code>。</li>
+  <li>仿真验证每帧 14 个移位脉冲、正确的 <code>ds</code> 位序和一个锁存脉冲。</li>
+  <li>Quartus Analysis &amp; Synthesis 通过，QSF 包含时钟、复位和 74HC595 的六个正确引脚。</li>
+  <li>上板后六位数码管能稳定显示固定数字。</li>
+  <li>能说明 <code>shcp</code>、<code>stcp</code>、<code>oe</code> 的职责区别。</li>
+</ol>
+
+<h2 id="ref">八、本课资源</h2>
+<ul>
+  <li><strong>官方对照：</strong><code>firebbs_doc/2-野火开源图书合集（源代码以及文档）/征途Pro/16_seg_595_static/</code>。</li>
+  <li><strong>引脚资料：</strong><code>ds=PIN_R1</code>、<code>oe=PIN_L11</code>、<code>shcp=PIN_B1</code>、<code>stcp=PIN_K9</code>。</li>
+  <li><strong>前置知识：</strong><a href="0006-beep.html">第 6 课</a>中的计数器、状态机和命令行仿真流程。</li>
+</ul>
+
+<div class="teacher">
+  <p><strong>开始任务：</strong>先创建 <code>test/case/07-seg595-static/src/hc595_ctrl.v</code>，
+  只完成固定 14 位数据的串行发送。写完后运行 <code>make syntax</code>，再把代码和输出发来。</p>
+</div>
+
+<nav class="lesson-nav">
+  <a href="../index.html">← 课程总览</a>
+  <a href="0006-beep.html">← 上一篇：第 6 课 · 无源蜂鸣器</a>
+</nav>
+
+</body>
+</html>
