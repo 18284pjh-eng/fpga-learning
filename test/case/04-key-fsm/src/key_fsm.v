@@ -49,7 +49,7 @@ end
 
 // next state set
 always @(*) begin
-   next_state = cur_state;
+   next_state = cur_state;// 保证正常情况下，状态保持
    case (cur_state)
       IDLE: if (!key_stable) next_state = PRESSED;
       PRESSED: begin
@@ -57,7 +57,7 @@ always @(*) begin
          else if (long_press_done) next_state = LONG;
       end
       LONG: if (key_stable) next_state = IDLE;
-      default: next_state = IDLE;
+      default: next_state = IDLE; //非法编码时，回退到安全状态
    endcase
 end
 
